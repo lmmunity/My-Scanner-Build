@@ -43,9 +43,8 @@ jobs:
 
       - name: Build APK
         run: |
-          # 使用 NativeScript 自动生成的调试证书，最稳妥
-          ns platform add android
-          ns build android --release --no-hmr --env.abiFilters=arm64-v8a
+          # --force 参数强制忽略“缺少模拟器”的警告，强行开始编译
+          ns build android --release --no-hmr --env.abiFilters=arm64-v8a --force
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
