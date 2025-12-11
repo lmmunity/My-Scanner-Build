@@ -1,3 +1,28 @@
+// --- 【上帝模式】强制所有依赖降级到适配 Android 33 的版本 ---
+configurations.all {
+    resolutionStrategy {
+        // 强制 activity 降级到 1.7.2 (支持 API 33)
+        force 'androidx.activity:activity-ktx:1.7.2'
+        force 'androidx.activity:activity:1.7.2'
+        
+        // 强制 profileinstaller 降级到 1.3.1 (支持 API 33)
+        force 'androidx.profileinstaller:profileinstaller:1.3.1'
+        
+        // 强制 splashscreen 降级到 1.0.1 (稳定版)
+        force 'androidx.core:core-splashscreen:1.0.1'
+        
+        // 双重保险：强制 core-ktx 也降级
+        force 'androidx.core:core-ktx:1.10.1'
+        
+        // 强制 appcompat
+        force 'androidx.appcompat:appcompat:1.6.1'
+    }
+}
+// --- ------------------------------------------------ ---
+
+project.ext.abiCodes = ['armeabi':1, 'armeabi-v7a':2, 'arm64-v8a':3, 'x86':4, 'x86_64':5]
+// ... 后面的代码保持不变
+
 
 project.ext.abiCodes = ['armeabi':1, 'armeabi-v7a':2, 'arm64-v8a':3, 'x86':4, 'x86_64':5]
 def BUILD_TOOLS_PATH = "$rootDir/build-tools"
@@ -5,12 +30,23 @@ def BUILD_TOOLS_PATH = "$rootDir/build-tools"
 apply plugin: "androidx.baselineprofile"
 apply plugin: "org.jetbrains.kotlin.android"
 
-android { 
+android {
+
+  // ---【修改开始】强制锁定编译版本为 33 ---
+  compileSdkVersion 33
+  buildToolsVersion "33.0.0"
+  // ---【修改结束】---
+
   // we only enable split if specified as an arg or if in debug and abiFilters is used(through cli)
   def splitEnabled = (gradle.startParameter.taskNames.contains("assembleDebug") && project.hasProperty('abiFilters')) || project.hasProperty('splitEnabled');
   defaultConfig {  
     multiDexEnabled false
     minSdkVersion 21
+
+  // ---【修改开始】强制锁定目标版本为 33 ---
+    targetSdkVersion 33
+    // ---【修改结束】---
+
     versionCode 125
     versionName "1.16.2"
 
@@ -22,6 +58,7 @@ android {
     //   // do we need other languages for this app?
     //   resConfigs "en"
     // }
+    /*
     ndk {
       if (splitEnabled || project.hasProperty('abiFilters')) {
         abiFilters.clear()
@@ -29,6 +66,12 @@ android {
           abiFilters.addAll(project.findProperty('abiFilters').split(',').collect{it as String})
         }
       }
+    }
+    */
+    ndk {
+      // 强制只编译 arm64-v8a (适配绝大多数现代手机)
+      // 这样既不需要命令行传参，也能获得极致的编译速度
+      abiFilters "arm64-v8a"
     }
     androidResources {
       generateLocaleConfig = true
@@ -178,7 +221,13 @@ android.applicationVariants.all { variant ->
 dependencies {
     def computeKotlinVersion = { -> project.hasProperty("kotlinVersion") ? kotlinVersion : "${ns_default_kotlin_version}" }
     def kotlinVersion = computeKotlinVersion()
-    implementation 'androidx.core:core-splashscreen:1.1.0-alpha02'
+    
+    // 【新增】告诉 Gradle 优先使用 libs 文件夹里的本地文件
+    implementation fileTree(dir: "libs", include: ["*.aar", "*.jar"])
+
+    // --- 【修改 1】换成稳定版 1.0.1 ---
+    implementation 'androidx.core:core-splashscreen:1.0.1'
+    
     constraints {
         implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk7:$kotlinVersion") {
             because("kotlin-stdlib-jdk7 is now a part of kotlin-stdlib")
@@ -188,7 +237,9 @@ dependencies {
         }
     }
 
-    implementation "androidx.profileinstaller:profileinstaller:1.4.1"
+    // --- 【修改 2】降级到 1.3.1 (支持 Android 33) ---
+    implementation "androidx.profileinstaller:profileinstaller:1.3.1"
+    
     baselineProfile project(':baselineprofile')
 
     implementation "com.github.skydoves:colorpickerview:2.2.4"

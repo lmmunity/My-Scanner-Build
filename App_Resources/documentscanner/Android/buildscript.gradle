@@ -1,7 +1,16 @@
 
 repositories {
+    maven { url 'https://repo.huaweicloud.com/repository/maven/' }
+    maven { url 'https://repo.huaweicloud.com/repository/maven/google/' }
+    maven { url 'https://repo.huaweicloud.com/repository/maven/jcenter/' }
     google()
     mavenCentral()
+}
+
+
+// --- 【新增】强制锁死 Android Gradle 插件版本为 7.4.2 ---
+dependencies {
+    classpath "com.android.tools.build:gradle:7.4.2"
 }
 //     classpath 'io.sentry:sentry-android-gradle-plugin:3.0.1'
 // }

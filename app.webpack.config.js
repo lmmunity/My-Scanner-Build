@@ -105,6 +105,8 @@ module.exports = (env, params = {}) => {
     env.appComponents.push('~/android/quicktoggle.android');
     const config = webpackConfig(env, params);
     config.entry.application = '~/android/application.android';
+
+    /*
     const {
         appId,
         appPath,
@@ -130,6 +132,39 @@ module.exports = (env, params = {}) => {
         keep_classnames_functionnames = false,
         startOnCam = false
     } = env;
+    */
+
+
+    // --- 修改开始：给关键路径加上默认值，防止 undefined 报错 ---
+    const {
+        appId = 'com.akylas.documentscanner',  // 默认值：对应 app/themes/documentscanner 文件夹
+        appPath = 'app',            // 默认值：对应 app 文件夹
+        appResourcesPath = 'App_Resources/documentscanner', // 默认值：对应资源文件夹
+        hmr, // --env.hmr
+        production, // --env.production
+        sourceMap, // --env.sourceMap
+        hiddenSourceMap, // --env.hiddenSourceMap
+        inlineSourceMap, // --env.inlineSourceMap
+        sentry = false, // --env.sentry
+        uploadSentry = false,
+        uglify, // --env.uglify
+        noconsole, // --env.noconsole
+        devlog, // --env.devlog
+        profile, // --env.profile
+        report,
+        fork = true, // --env.fakeall
+        accessibility = true, // --env.accessibility
+        playStoreBuild = true, // --env.playStoreBuild
+        timeline, // --env.timeline
+        locale = 'en', // --env.locale
+        theme = 'auto', // --env.theme
+        keep_classnames_functionnames = false,
+        startOnCam = false
+    } = env;
+    // --- 修改结束 ---
+
+
+
     console.log('env', env);
     const mode = production ? 'production' : 'development';
     const platform = env && ((env.android && 'android') || (env.ios && 'ios'));
