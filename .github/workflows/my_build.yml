@@ -31,12 +31,17 @@ jobs:
 
       - name: Install Android SDK 33
         run: |
+          # 手动把 sdkmanager 的路径加入环境变量
+          export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$PATH
+          
+          # 现在可以正常运行了
           yes | sdkmanager --licenses
           sdkmanager "platforms;android-33" "build-tools;33.0.0"
 
       - name: Build APK
         run: |
           # 使用 NativeScript 自动生成的调试证书，最稳妥
+          ns platform add android
           ns build android --release --no-hmr --env.abiFilters=arm64-v8a
 
       - name: Upload APK
