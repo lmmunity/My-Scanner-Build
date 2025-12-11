@@ -31,15 +31,18 @@ jobs:
 
       - name: Install Android SDK 33
         run: |
-          # 【关键】把路径写入 GitHub 的全局变量文件，让它对后面的步骤也生效
+          # 1. 把所有可能的工具路径都加到环境变量里
           echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
           echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
+          echo "$ANDROID_HOME/emulator" >> $GITHUB_PATH
+          echo "$ANDROID_HOME/build-tools/33.0.0" >> $GITHUB_PATH
           
-          # 临时刷新当前步骤的 PATH，以便马上能用
+          # 2. 临时刷新 PATH 以便当前步骤使用
           export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$PATH
           
+          # 3. 安装 SDK 平台、构建工具、以及【emulator】
           yes | sdkmanager --licenses
-          sdkmanager "platforms;android-33" "build-tools;33.0.0"
+          sdkmanager "platforms;android-33" "build-tools;33.0.0" "emulator" "platform-tools"
 
       - name: Build APK
         run: |
