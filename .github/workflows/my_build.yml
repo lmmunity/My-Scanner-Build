@@ -22,7 +22,7 @@ jobs:
           node-version: '18'
 
       - name: Install NativeScript
-        run: npm install -g nativescript@8.6.0
+        run: npm install -g nativescript@8.6.0 --no-optional
 
       - name: Install Dependencies
         run: |
