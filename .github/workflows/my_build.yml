@@ -29,6 +29,11 @@ jobs:
           npm install --legacy-peer-deps
           npx ts-patch install -s
 
+      - name: Install Android SDK 33
+        run: |
+          yes | sdkmanager --licenses
+          sdkmanager "platforms;android-33" "build-tools;33.0.0"
+
       - name: Build APK
         run: |
           # 使用 NativeScript 自动生成的调试证书，最稳妥
