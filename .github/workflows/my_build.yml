@@ -46,8 +46,27 @@ jobs:
 
       - name: Build APK
         run: |
-          # --force 参数强制忽略“缺少模拟器”的警告，强行开始编译
-          ns build android --release --no-hmr --env.abiFilters=arm64-v8a --force
+          # 1. 现场生成一个临时签名证书 (解决 "specify --key-store" 报错)
+          # 密码统一设为 "android"，别名设为 "androiddebugkey"
+          keytool -genkey -v \
+            -keystore debug.keystore \
+            -storepass android \
+            -alias androiddebugkey \
+            -keypass android \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
+
+          # 2. 把证书喂给编译命令
+          ns build android --release \
+            --no-hmr \
+            --env.abiFilters=arm64-v8a \
+            --force \
+            --key-store-path debug.keystore \
+            --key-store-password android \
+            --key-store-alias androiddebugkey \
+            --key-store-alias-password android
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
