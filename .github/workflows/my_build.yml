@@ -50,21 +50,23 @@ jobs:
           cp -r tesseract-4.1.3/* plugin-nativeprocessor/platforms/android/cpp/tesseract/
 
       # ----------------------------------------------------------------
-      # 【修正】暴力修复源代码中的 Kotlin 报错
+      # 【终极修正】全方位暴力修复 Kotlin 报错
       # ----------------------------------------------------------------
-      - name: Fix Kotlin Code
+      - name: Fix Kotlin Errors Forcefully
         run: |
-          # 找到 PDFUtils.kt
           FILE=$(find plugin-nativeprocessor -name "PDFUtils.kt")
-          echo "Patching file: $FILE"
+          echo "Patching source file: $FILE"
           
-          # 1. 修复 Smart cast 报错
-          # 将 document. 替换为 document!!. (强制非空断言)
+          # 针对 Smart Cast 报错的全面替换
           sed -i 's/document\./document!!\./g' $FILE
+          sed -i 's/(document)/(document!!)/g' $FILE
+          sed -i 's/, document/, document!!/g' $FILE
+          sed -i 's/return document/return document!!/g' $FILE
           
-          # 2. 修复 Opt-in 报错
-          # 在第一行插入注解
-          sed -i '1i @file:OptIn(kotlin.ExperimentalStdlibApi::class)' $FILE
+          # 针对 Opt-in 报错的 Gradle 配置注入
+          GRADLE_CONFIG="plugin-nativeprocessor/platforms/android/include.gradle"
+          mkdir -p $(dirname $GRADLE_CONFIG)
+          echo 'android { kotlinOptions { freeCompilerArgs += ["-Xopt-in=kotlin.ExperimentalStdlibApi", "-Xopt-in=kotlin.contracts.ExperimentalContracts"] } }' >> $GRADLE_CONFIG
 
       - name: Install Android SDK 33
         run: |
