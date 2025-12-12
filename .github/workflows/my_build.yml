@@ -32,11 +32,18 @@ jobs:
       # 【新增】手动“喂”给它 OpenCV
       - name: Download OpenCV
         run: |
+          # 1. 下载并解压
           wget -q https://github.com/opencv/opencv/releases/download/4.5.5/opencv-4.5.5-android-sdk.zip
           unzip -q opencv-4.5.5-android-sdk.zip
+          
+          # 2. 【关键】先强制删除目标目录，防止 "File exists" 报错
+          rm -rf plugin-nativeprocessor/platforms/android/cpp/opencv
+          
+          # 3. 重新创建干净的目录
           mkdir -p plugin-nativeprocessor/platforms/android/cpp/opencv
+          
+          # 4. 复制文件
           cp -r OpenCV-android-sdk/sdk/native/* plugin-nativeprocessor/platforms/android/cpp/opencv/
-
       - name: Install Android SDK 33
         run: |
           echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
