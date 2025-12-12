@@ -8,7 +8,7 @@ jobs:
       - name: Checkout Repo
         uses: actions/checkout@v4
         with:
-          submodules: recursive # 自动拉取子模块
+          submodules: recursive
 
       - name: Setup Java 17
         uses: actions/setup-java@v4
@@ -29,25 +29,28 @@ jobs:
           npm install --legacy-peer-deps
           npx ts-patch install -s
 
+      # 【新增】手动“喂”给它 OpenCV
+      - name: Download OpenCV
+        run: |
+          wget -q https://github.com/opencv/opencv/releases/download/4.5.5/opencv-4.5.5-android-sdk.zip
+          unzip -q opencv-4.5.5-android-sdk.zip
+          mkdir -p plugin-nativeprocessor/platforms/android/cpp/opencv
+          cp -r OpenCV-android-sdk/sdk/native/* plugin-nativeprocessor/platforms/android/cpp/opencv/
+
       - name: Install Android SDK 33
         run: |
-          # 1. 把所有可能的工具路径都加到环境变量里
           echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
           echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
           echo "$ANDROID_HOME/emulator" >> $GITHUB_PATH
           echo "$ANDROID_HOME/build-tools/33.0.0" >> $GITHUB_PATH
           
-          # 2. 临时刷新 PATH 以便当前步骤使用
           export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$PATH
           
-          # 3. 安装 SDK 平台、构建工具、以及【emulator】
           yes | sdkmanager --licenses
           sdkmanager "platforms;android-33" "build-tools;33.0.0" "emulator" "platform-tools"
 
       - name: Build APK
         run: |
-          # 1. 现场生成一个临时签名证书 (解决 "specify --key-store" 报错)
-          # 密码统一设为 "android"，别名设为 "androiddebugkey"
           keytool -genkey -v \
             -keystore debug.keystore \
             -storepass android \
@@ -58,7 +61,7 @@ jobs:
             -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
 
-          # 2. 把证书喂给编译命令
+          ns platform add android
           ns build android --release \
             --no-hmr \
             --env.abiFilters=arm64-v8a \
@@ -67,10 +70,9 @@ jobs:
             --key-store-password android \
             --key-store-alias androiddebugkey \
             --key-store-alias-password android
-
+          
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: app-release
-          # 注意：NativeScript 默认输出路径可能包含 release 或 debug，这里通配符匹配
           path: platforms/android/app/build/outputs/apk/release/*.apk
