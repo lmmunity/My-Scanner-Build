@@ -5,13 +5,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      # 1. 拉取代码
       - name: Checkout Repo
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      # 2. 环境准备 (Java + Node)
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
@@ -23,7 +21,6 @@ jobs:
         with:
           node-version: '18'
 
-      # 3. 安装 NativeScript (禁止脚本运行以跳过 fsevents 报错)
       - name: Install NativeScript
         run: npm install -g nativescript@8.6.0 --ignore-scripts
 
@@ -33,14 +30,12 @@ jobs:
           npx ts-patch install -s
 
       # ----------------------------------------------------------------
-      # 手动填充原生依赖 (OpenCV + Tesseract)
+      # 手动填充原生依赖
       # ----------------------------------------------------------------
-      
       - name: Download OpenCV
         run: |
           wget -q https://github.com/opencv/opencv/releases/download/4.5.5/opencv-4.5.5-android-sdk.zip
           unzip -q opencv-4.5.5-android-sdk.zip
-          # 先清理旧目录，防止 "File exists" 报错
           rm -rf plugin-nativeprocessor/platforms/android/cpp/opencv
           mkdir -p plugin-nativeprocessor/platforms/android/cpp/opencv
           cp -r OpenCV-android-sdk/sdk/native/* plugin-nativeprocessor/platforms/android/cpp/opencv/
@@ -49,69 +44,49 @@ jobs:
         run: |
           wget -q https://github.com/tesseract-ocr/tesseract/archive/refs/tags/4.1.3.zip -O tesseract.zip
           unzip -q tesseract.zip
-          # 先清理旧目录
           rm -rf plugin-nativeprocessor/platforms/android/cpp/tesseract
           mkdir -p plugin-nativeprocessor/platforms/android/cpp/tesseract
           cp -r tesseract-4.1.3/* plugin-nativeprocessor/platforms/android/cpp/tesseract/
 
       # ----------------------------------------------------------------
-      # 【关键步骤】安全且精准地修复 Kotlin 报错
+      # 【智能修正】保护变量定义 -> 全局替换调用 -> 恢复定义
       # ----------------------------------------------------------------
-      - name: Surgical Kotlin Fix
+      - name: Final Logic Fix
         run: |
-          # 1. 找到源文件 PDFUtils.kt
           FILE=$(find plugin-nativeprocessor -name "PDFUtils.kt")
-          echo "Patching file: $FILE"
+          echo "Patching: $FILE"
           
-          # 2. 修复 "Opt-in" 报错 (最稳妥方案：在文件第一行插入注解)
-          # 允许 ExperimentalStdlibApi 和 ExperimentalContracts
+          # 1. 修复 Opt-in
           sed -i '1i @file:OptIn(kotlin.ExperimentalStdlibApi::class, kotlin.contracts.ExperimentalContracts::class)' $FILE
           
-          # 3. 修复 "Smart cast" 报错 (精准替换，避开变量定义)
+          # 2. 保护定义
+          sed -i 's/val document/val document_SAFE/g' $FILE
+          sed -i 's/var document/var document_SAFE/g' $FILE
+          sed -i 's/document:/document_SAFE:/g' $FILE
           
-          # 替换 document.close() -> document!!.close() (只替换后面跟点的)
-          sed -i 's/document\./document!!\./g' $FILE
+          # 3. 全局强制非空断言 (利用 \b 匹配单词边界)
+          sed -i 's/\bdocument\b/document!!/g' $FILE
           
-          # 替换 document?.close() -> document!!.close() (处理安全调用)
-          sed -i 's/document?\./document!!\./g' $FILE
+          # 4. 恢复定义
+          sed -i 's/document_SAFE/document/g' $FILE
           
-          # 替换作为参数传递的情况: (document) -> (document!!)
-          sed -i 's/(document)/(document!!)/g' $FILE
-          
-          # 替换作为多个参数传递的情况: , document -> , document!!
-          sed -i 's/, document/, document!!/g' $FILE
-          
-          # 替换返回值的情况: return document -> return document!!
-          sed -i 's/return document/return document!!/g' $FILE
-          
-          # 4. 双保险：在 Gradle 配置里也加上参数
+          # 5. 双保险 Gradle 配置
           GRADLE_CONFIG="plugin-nativeprocessor/platforms/android/include.gradle"
           mkdir -p $(dirname $GRADLE_CONFIG)
           echo 'android { kotlinOptions { freeCompilerArgs += ["-Xopt-in=kotlin.ExperimentalStdlibApi", "-Xopt-in=kotlin.contracts.ExperimentalContracts"] } }' >> $GRADLE_CONFIG
-          
-          echo "Kotlin fixes applied."
 
-      # ----------------------------------------------------------------
-      # 安装 Android 环境并编译
-      # ----------------------------------------------------------------
       - name: Install Android SDK 33
         run: |
-          # 配置环境变量 (写入 GITHUB_PATH 以便后续步骤生效)
           echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
           echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
           echo "$ANDROID_HOME/emulator" >> $GITHUB_PATH
           echo "$ANDROID_HOME/build-tools/33.0.0" >> $GITHUB_PATH
-          
-          # 临时生效
           export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$PATH
-          
-          # 安装 SDK 33, 构建工具, 模拟器
           yes | sdkmanager --licenses
           sdkmanager "platforms;android-33" "build-tools;33.0.0" "emulator" "platform-tools"
 
       - name: Build APK
         run: |
-          # 1. 生成临时签名证书
           keytool -genkey -v \
             -keystore debug.keystore \
             -storepass android \
@@ -122,7 +97,6 @@ jobs:
             -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
 
-          # 2. 开始编译 (添加 --force 忽略模拟器检查)
           ns platform add android
           ns build android --release \
             --no-hmr \
