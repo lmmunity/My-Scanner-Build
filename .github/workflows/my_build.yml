@@ -55,22 +55,12 @@ jobs:
         run: |
           FILE=$(find plugin-nativeprocessor -name "PDFUtils.kt")
           echo "Patching source file: $FILE"
-          
-          # 1. 修复 Opt-in
           sed -i '1i @file:OptIn(kotlin.ExperimentalStdlibApi::class, kotlin.contracts.ExperimentalContracts::class)' $FILE
-
-          # 2. 保护定义和赋值
           sed -i 's/val document/val document_PROTECTED/g' $FILE
           sed -i 's/var document/var document_PROTECTED/g' $FILE
           sed -i 's/document *=/document_PROTECTED =/g' $FILE
-
-          # 3. 核爆：强制非空断言
           sed -i 's/\bdocument\b/document!!/g' $FILE
-
-          # 4. 恢复保护
           sed -i 's/document_PROTECTED/document/g' $FILE
-
-          # 5. Gradle 配置注入
           GRADLE_CONFIG="plugin-nativeprocessor/platforms/android/include.gradle"
           mkdir -p $(dirname $GRADLE_CONFIG)
           echo 'android { kotlinOptions { freeCompilerArgs += ["-Xopt-in=kotlin.ExperimentalStdlibApi", "-Xopt-in=kotlin.contracts.ExperimentalContracts"] } }' >> $GRADLE_CONFIG
@@ -94,8 +84,20 @@ jobs:
           echo "Disabling hook: $HOOK_FILE"
           echo "module.exports = function() { console.log('License report skipped by CI override'); };" > $HOOK_FILE
 
-      - name: Build APK
+      # ----------------------------------------------------------------
+      # 【最终战】升级 Gradle & 编译
+      # ----------------------------------------------------------------
+      - name: Upgrade Gradle & Build
         run: |
+          # 1. 初始化平台配置
+          ns platform add android
+          
+          # 2. 暴力升级 Gradle 到 8.5 (解决 EnumEntriesKt 报错)
+          echo "Upgrading Gradle Wrapper to 8.5..."
+          find . -name "gradle-wrapper.properties" -print0 | xargs -0 sed -i 's/gradle-7\.5/gradle-8.5/g'
+          find . -name "gradle-wrapper.properties" -print0 | xargs -0 sed -i 's/gradle-7\.[0-9]/gradle-8.5/g'
+          
+          # 3. 生成证书
           keytool -genkey -v \
             -keystore debug.keystore \
             -storepass android \
@@ -106,7 +108,7 @@ jobs:
             -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
 
-          ns platform add android
+          # 4. 编译 APK
           ns build android --release \
             --no-hmr \
             --env.abiFilters=arm64-v8a \
