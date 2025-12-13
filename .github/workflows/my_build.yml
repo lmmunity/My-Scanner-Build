@@ -76,7 +76,7 @@ jobs:
           sdkmanager "platforms;android-33" "build-tools;33.0.0" "emulator" "platform-tools"
 
       # ----------------------------------------------------------------
-      # 【新增】禁用 License 插件钩子
+      # 【禁用】License 插件钩子
       # ----------------------------------------------------------------
       - name: Disable License Report Hook
         run: |
@@ -85,19 +85,23 @@ jobs:
           echo "module.exports = function() { console.log('License report skipped by CI override'); };" > $HOOK_FILE
 
       # ----------------------------------------------------------------
-      # 【最终战】升级 Gradle & 编译
+      # 【最终战】修正配置 -> 升级 Gradle -> 编译
       # ----------------------------------------------------------------
       - name: Upgrade Gradle & Build
         run: |
-          # 1. 初始化平台配置
+          # 1. 删除 app.gradle 中导致报错的行
+          APP_GRADLE="App_Resources/documentscanner/Android/app.gradle"
+          sed -i '/generateLocaleConfig/d' $APP_GRADLE
+          
+          # 2. 初始化平台
           ns platform add android
           
-          # 2. 暴力升级 Gradle 到 8.5 (解决 EnumEntriesKt 报错)
+          # 3. 升级 Gradle 到 8.5
           echo "Upgrading Gradle Wrapper to 8.5..."
           find . -name "gradle-wrapper.properties" -print0 | xargs -0 sed -i 's/gradle-7\.5/gradle-8.5/g'
           find . -name "gradle-wrapper.properties" -print0 | xargs -0 sed -i 's/gradle-7\.[0-9]/gradle-8.5/g'
           
-          # 3. 生成证书
+          # 4. 生成证书
           keytool -genkey -v \
             -keystore debug.keystore \
             -storepass android \
@@ -108,7 +112,7 @@ jobs:
             -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
 
-          # 4. 编译 APK
+          # 5. 编译
           ns build android --release \
             --no-hmr \
             --env.abiFilters=arm64-v8a \
