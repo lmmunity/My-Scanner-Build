@@ -30,7 +30,7 @@ jobs:
           npx ts-patch install -s
 
       # ----------------------------------------------------------------
-      # 1. 手动填充原生依赖 (OpenCV + Tesseract)
+      # 手动填充原生依赖
       # ----------------------------------------------------------------
       - name: Download OpenCV
         run: |
@@ -49,22 +49,18 @@ jobs:
           cp -r tesseract-4.1.3/* plugin-nativeprocessor/platforms/android/cpp/tesseract/
 
       # ----------------------------------------------------------------
-      # 2. 完美修正 Kotlin 报错 (保护定义 -> 替换调用 -> 恢复)
+      # 【完美修正】Kotlin 代码修复
       # ----------------------------------------------------------------
       - name: Perfect Kotlin Fix
         run: |
           FILE=$(find plugin-nativeprocessor -name "PDFUtils.kt")
           echo "Patching source file: $FILE"
           sed -i '1i @file:OptIn(kotlin.ExperimentalStdlibApi::class, kotlin.contracts.ExperimentalContracts::class)' $FILE
-          # 保护
           sed -i 's/val document/val document_PROTECTED/g' $FILE
           sed -i 's/var document/var document_PROTECTED/g' $FILE
           sed -i 's/document *=/document_PROTECTED =/g' $FILE
-          # 替换
           sed -i 's/\bdocument\b/document!!/g' $FILE
-          # 恢复
           sed -i 's/document_PROTECTED/document/g' $FILE
-          
           GRADLE_CONFIG="plugin-nativeprocessor/platforms/android/include.gradle"
           mkdir -p $(dirname $GRADLE_CONFIG)
           echo 'android { kotlinOptions { freeCompilerArgs += ["-Xopt-in=kotlin.ExperimentalStdlibApi", "-Xopt-in=kotlin.contracts.ExperimentalContracts"] } }' >> $GRADLE_CONFIG
@@ -80,7 +76,7 @@ jobs:
           sdkmanager "platforms;android-33" "build-tools;33.0.0" "emulator" "platform-tools"
 
       # ----------------------------------------------------------------
-      # 3. 禁用 License 插件钩子 (防止 127 报错)
+      # 【禁用】License 插件钩子
       # ----------------------------------------------------------------
       - name: Disable License Report Hook
         run: |
@@ -89,32 +85,31 @@ jobs:
           echo "module.exports = function() { console.log('License report skipped by CI override'); };" > $HOOK_FILE
 
       # ----------------------------------------------------------------
-      # 4. 【核心大招】先发制人：在编译前清洗 node_modules 里的旧 Gradle 配置
+      # 【绝杀】全域强制覆盖 Gradle 版本 (v2.0)
       # ----------------------------------------------------------------
-      - name: Pre-emptive Gradle Fix
+      - name: Final Gradle Override
         run: |
-          # A. 修复主项目配置
+          # 1. 修复主项目配置
           APP_GRADLE="App_Resources/documentscanner/Android/app.gradle"
           sed -i '/generateLocaleConfig/d' $APP_GRADLE
           
-          # B. 【关键】清洗 node_modules 里的 Gradle Wrapper (7.x -> 8.5)
-          # 这会强制所有第三方插件使用 Gradle 8.5，从而兼容 AGP 8.1.4
-          echo "Nuking node_modules Gradle Wrappers..."
+          # 2. 精准狙击 + 全域清洗 node_modules
+          echo "Nuking GradleWrappers in node_modules..."
           find node_modules -name "gradle-wrapper.properties" -type f -exec sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.5-bin.zip|' {} +
           
-          # C. 清洗 node_modules 里的 AGP 版本 (7.x -> 8.1.4)
-          echo "Nuking node_modules AGP versions..."
+          # 3. 清洗 AGP 版本
+          echo "Nuking AGP versions in node_modules..."
           find node_modules -name "*.gradle" -type f -print0 | xargs -0 sed -i 's/com.android.tools.build:gradle:[0-9]\.[0-9]\.[0-9]/com.android.tools.build:gradle:8.1.4/g'
 
-          # D. 生成平台文件 (此时生成的文件应该已经是干净的了)
+          # 4. 初始化平台
           ns platform add android
           
-          # E. 双保险：再次清洗生成的平台文件 (防止有漏网之鱼)
-          echo "Double checking generated platform files..."
-          find . -name "gradle-wrapper.properties" -type f -exec sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.5-bin.zip|' {} +
-          find . -name "*.gradle" -type f -print0 | xargs -0 sed -i 's/com.android.tools.build:gradle:[0-9]\.[0-9]\.[0-9]/com.android.tools.build:gradle:8.1.4/g'
-          
-          # F. 生成证书
+          # 5. 补刀：清洗生成的 platforms 目录
+          echo "Scanning platforms directory..."
+          find platforms -name "gradle-wrapper.properties" -type f -exec sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.5-bin.zip|' {} +
+          find platforms -name "*.gradle" -type f -print0 | xargs -0 sed -i 's/com.android.tools.build:gradle:[0-9]\.[0-9]\.[0-9]/com.android.tools.build:gradle:8.1.4/g'
+
+          # 6. 生成证书
           keytool -genkey -v \
             -keystore debug.keystore \
             -storepass android \
@@ -125,7 +120,7 @@ jobs:
             -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
 
-          # G. 编译
+          # 7. 编译
           ns build android --release \
             --no-hmr \
             --env.abiFilters=arm64-v8a \
