@@ -84,74 +84,71 @@ jobs:
           echo "Disabling hook: $HOOK_FILE"
           echo "module.exports = function() { console.log('License report skipped by CI override'); };" > $HOOK_FILE
 
-      # ----------------------------------------------------------------
-      # 【降维打击】修改全局 NPM 目录下的 CLI 模板 (根治 Gradle 版本问题)
-      # ----------------------------------------------------------------
-      # 【终极必杀】自动修复所有插件的 AGP 8.x 兼容性问题 (Namespace + BuildConfig)
-      # 【双重必杀】自动注入 Namespace + 强制升级 Java 17 (解决 JVM Target 冲突)
-      # 【终极同步】全格式覆盖 Java 1.8 -> 17 + Namespace 自动注入
-      # 【终极必杀】通过追加配置块，强制覆盖所有插件的 JVM 版本
-      - name: Force Java 17 (Append Mode)
+      # 【上帝模式】注入 Gradle Init 脚本，运行时强制覆盖所有 JVM 版本配置
+      - name: God Mode Build
         run: |
-          # 1. 清理环境
+          # 1. 基础清理
           rm -rf platforms node_modules/package-lock.json
           
-          # 2. 基础环境修复 (Gradle 8.5 + AGP 8.1.4)
+          # 2. 基础版本修复 (Gradle 8.5 + AGP 8.1.4)
           NPM_ROOT=$(npm root -g)
-          echo "Patching Gradle Wrappers & AGP..."
+          echo "Patching Gradle Wrappers..."
           find "$NPM_ROOT" node_modules -name "gradle-wrapper.properties" -type f -exec sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.5-bin.zip|' {} +
+          echo "Patching AGP versions..."
           find "$NPM_ROOT" node_modules -name "*.gradle" -type f -print0 | xargs -0 sed -i 's/com.android.tools.build:gradle:[0-9]\.[0-9]\.[0-9]/com.android.tools.build:gradle:8.1.4/g'
 
-          # 3. 【核心大招】向所有 build.gradle 追加强制配置块
-          # 这招比正则替换更稳，利用 Gradle 后加载覆盖先加载的特性
-          echo "Appending Java 17 override block to all plugins..."
-          
-          # 定义要追加的 Groovy 代码块
-          OVERRIDE_BLOCK='\n\nandroid {\n    compileOptions {\n        sourceCompatibility = JavaVersion.VERSION_17\n        targetCompatibility = JavaVersion.VERSION_17\n    }\n    kotlinOptions {\n        jvmTarget = "17"\n    }\n}\n'
-          
-          # 找到 node_modules 下所有的 build.gradle (排除根目录)
-          find node_modules -name "build.gradle" -type f | while read gradleFile; do
-            # 判断文件里是否包含 "android {" (只修改安卓相关的脚本)
-            if grep -q "android {" "$gradleFile"; then
-              echo "Overriding Java version in $gradleFile"
-              # 追加配置到文件末尾
-              printf "$OVERRIDE_BLOCK" >> "$gradleFile"
-            fi
-          done
-
-          # 4. 自动注入 Namespace (解决 AGP 8.0 报错)
+          # 3. 自动注入 Namespace (解决 AGP 8.0 报错)
           echo "Injecting Namespaces..."
           find node_modules -name "AndroidManifest.xml" | while read manifest; do
             dir=$(dirname "$manifest")
             gradleFile="$dir/build.gradle"
-            if [ -f "$gradleFile" ]; then
-              pkg=$(grep -o 'package="[^"]*"' "$manifest" | cut -d'"' -f2)
+            if [ -f "$gradleFile" ] && grep -q "package=" "$manifest"; then
+              pkg=$(grep -o 'package="[^"]*"' "$manifest" | cut -d'"' -f2 | head -1)
               if [ ! -z "$pkg" ] && ! grep -q "namespace" "$gradleFile"; then
+                 # 注入 namespace 并开启 buildConfig
                  sed -i "s/android {/android { namespace '$pkg'/g" "$gradleFile"
                  sed -i "s/android {/android { buildFeatures { buildConfig = true }/g" "$gradleFile"
               fi
             fi
           done
 
-          # 5. 清理旧配置
+          # 4. 清理旧配置
           find node_modules -name "*.gradle" -type f -exec sed -i '/generateReleaseBuildConfig/d' {} +
           sed -i '/generateLocaleConfig/d' "App_Resources/documentscanner/Android/app.gradle"
 
-          # 6. 生成平台
+          # 5. 【核心大招】创建 Gradle 初始化脚本 (init.gradle)
+          # 这段脚本会在 Gradle 运行时动态覆盖所有配置，比 sed 替换更彻底、更无敌
+          mkdir -p ~/.gradle/init.d
+          cat > ~/.gradle/init.d/force-java17.gradle <<EOF
+          allprojects {
+              afterEvaluate { project ->
+                  if (project.plugins.hasPlugin('com.android.library') || project.plugins.hasPlugin('com.android.application')) {
+                      android {
+                          compileOptions {
+                              sourceCompatibility = JavaVersion.VERSION_17
+                              targetCompatibility = JavaVersion.VERSION_17
+                          }
+                      }
+                  }
+                  tasks.withType(JavaCompile).configureEach {
+                      sourceCompatibility = JavaVersion.VERSION_17
+                      targetCompatibility = JavaVersion.VERSION_17
+                  }
+                  tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+                      kotlinOptions {
+                          jvmTarget = "17"
+                      }
+                  }
+              }
+          }
+          EOF
+          echo "Gradle Init Script injected."
+
+          # 6. 生成平台 (无需再手动替换 platforms 里的文件了，init.gradle 会搞定一切)
           ns platform add android
           
-          # 7. 【补刀】检查生成的 platforms 目录 (再次追加覆盖)
-          echo "Sanitizing generated platforms directory..."
+          # 7. 再次确保 platforms 里的 wrapper 是 8.5 (Wrapper 还是得物理替换)
           find platforms/android -name "gradle-wrapper.properties" -type f -exec sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.5-bin.zip|' {} +
-          
-          # 同样对生成的 build.gradle 追加配置
-          find platforms/android -name "build.gradle" -type f | while read gradleFile; do
-            if grep -q "android {" "$gradleFile"; then
-               printf "$OVERRIDE_BLOCK" >> "$gradleFile"
-            fi
-          done
-          
-          # 确保生成的 AGP 版本正确
           find platforms/android -name "*.gradle" -type f -print0 | xargs -0 sed -i 's/com.android.tools.build:gradle:[0-9]\.[0-9]\.[0-9]/com.android.tools.build:gradle:8.1.4/g'
 
           # 8. 生成证书
@@ -174,6 +171,12 @@ jobs:
             --key-store-password android \
             --key-store-alias androiddebugkey \
             --key-store-alias-password android
+          
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release
+          path: platforms/android/app/build/outputs/apk/release/*.apk
           
       - name: Upload APK
         uses: actions/upload-artifact@v4
