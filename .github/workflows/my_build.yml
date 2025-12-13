@@ -87,24 +87,64 @@ jobs:
       # ----------------------------------------------------------------
       # 【修正上帝模式】修复空格遗漏和 Groovy 语法
       # ----------------------------------------------------------------
-      - name: Final Groovy Fix
+      # 【终极锁定】强制锁定 AGP 版本 + Java 17，无视任何旧配置
+      - name: Dependency Lock Fix
         run: |
           # 1. 基础清理
           rm -rf platforms node_modules/package-lock.json
           
-          # 2. 基础版本修复 (Gradle 8.5 + AGP 8.1.4)
+          # 2. 基础版本修复 (Gradle 8.5)
           NPM_ROOT=$(npm root -g)
-          echo "Patching Gradle Wrappers..."
+          echo "Patching Gradle Wrappers (8.5)..."
           find "$NPM_ROOT" node_modules -name "gradle-wrapper.properties" -type f -exec sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.5-bin.zip|' {} +
-          echo "Patching AGP versions..."
-          find "$NPM_ROOT" node_modules -name "*.gradle" -type f -print0 | xargs -0 sed -i 's/com.android.tools.build:gradle:[0-9]\.[0-9]\.[0-9]/com.android.tools.build:gradle:8.1.4/g'
 
-          # 3. 自动注入 Namespace & 清理旧配置
-          echo "Injecting Namespaces & Cleaning Obsolete Configs..."
+          # 3. 清理主项目旧配置
+          echo "Cleaning App_Resources..."
+          sed -i '/generateLocaleConfig/d' "App_Resources/documentscanner/Android/app.gradle"
+          # 尝试直接修改那个“幕后黑手”文件 (如果存在)
+          find App_Resources -name "rootbuildscript.gradle" -type f -exec sed -i 's/7\.4\.2/8.1.4/g' {} +
+          # 顺手把所有 App_Resources 里的 7.4.2 都改了
+          find App_Resources -type f -exec sed -i 's/7\.4\.2/8.1.4/g' {} +
+
+          # 4. 生成平台
+          ns platform add android
+          
+          # 5. 【核心大招】向生成的 build.gradle 注入强制版本策略
+          # 这段代码会告诉 Gradle：凡是遇到 "com.android.tools.build:gradle"，不管它想要几点几，强制给它 8.1.4
+          echo "Injecting resolutionStrategy to enforce AGP 8.1.4..."
+          
+          ROOT_BUILD_GRADLE="platforms/android/build.gradle"
+          
+          # 定义我们要注入的策略块
+          STRATEGY_BLOCK='buildscript { configurations.all { resolutionStrategy { force "com.android.tools.build:gradle:8.1.4" } } }'
+          
+          # 将其插到文件最前面
+          if [ -f "$ROOT_BUILD_GRADLE" ]; then
+             # 使用临时文件技巧插入到第一行
+             echo "$STRATEGY_BLOCK" | cat - "$ROOT_BUILD_GRADLE" > temp && mv temp "$ROOT_BUILD_GRADLE"
+             echo "Resolution Strategy Injected!"
+          else
+             echo "Error: platforms/android/build.gradle not found!"
+             exit 1
+          fi
+
+          # 6. 【补刀】再次确保 Wrapper 是 8.5
+          find platforms/android -name "gradle-wrapper.properties" -type f -exec sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.5-bin.zip|' {} +
+
+          # 7. 【Java 17 强制修正】(保留之前的逻辑)
+          echo "Enforcing Java 17..."
+          OVERRIDE_BLOCK='\n\nandroid {\n    compileOptions {\n        sourceCompatibility = JavaVersion.VERSION_17\n        targetCompatibility = JavaVersion.VERSION_17\n    }\n    kotlinOptions {\n        jvmTarget = "17"\n    }\n}\n'
+          find platforms/android -name "build.gradle" -type f | while read gradleFile; do
+            if grep -q "android {" "$gradleFile"; then
+               printf "$OVERRIDE_BLOCK" >> "$gradleFile"
+            fi
+          done
+          
+          # 8. Namespace 注入 (保留)
           find node_modules -name "AndroidManifest.xml" | while read manifest; do
             dir=$(dirname "$manifest")
             gradleFile="$dir/build.gradle"
-            if [ -f "$gradleFile" ] && grep -q "package=" "$manifest"; then
+            if [ -f "$gradleFile" ]; then
               pkg=$(grep -o 'package="[^"]*"' "$manifest" | cut -d'"' -f2 | head -1)
               if [ ! -z "$pkg" ] && ! grep -q "namespace" "$gradleFile"; then
                  sed -i "s/android {/android { namespace '$pkg'/g" "$gradleFile"
@@ -112,52 +152,8 @@ jobs:
               fi
             fi
           done
-          find node_modules -name "*.gradle" -type f -exec sed -i '/generateReleaseBuildConfig/d' {} +
-          sed -i '/generateLocaleConfig/d' "App_Resources/documentscanner/Android/app.gradle"
 
-          # 4. 【核心大招】创建 Gradle 初始化脚本
-          # 使用 Class.forName 避免 Groovy 解析 org 为变量
-          mkdir -p ~/.gradle/init.d
-          cat > ~/.gradle/init.d/force-java17.gradle <<EOF
-          allprojects {
-              afterEvaluate { project ->
-                  if (project.plugins.hasPlugin('com.android.library') || project.plugins.hasPlugin('com.android.application')) {
-                      android {
-                          compileOptions {
-                              sourceCompatibility = JavaVersion.VERSION_17
-                              targetCompatibility = JavaVersion.VERSION_17
-                          }
-                      }
-                  }
-                  // Java Compile tasks
-                  tasks.withType(JavaCompile).configureEach {
-                      sourceCompatibility = JavaVersion.VERSION_17
-                      targetCompatibility = JavaVersion.VERSION_17
-                  }
-                  // Kotlin Compile tasks
-                  try {
-                      def kotlinCompileClass = Class.forName('org.jetbrains.kotlin.gradle.tasks.KotlinCompile')
-                      tasks.withType(kotlinCompileClass).configureEach {
-                          kotlinOptions {
-                              jvmTarget = "17"
-                          }
-                      }
-                  } catch (ClassNotFoundException e) {
-                      // Ignore if Kotlin plugin is not applied
-                  }
-              }
-          }
-          EOF
-          echo "Gradle Init Script (Safe Mode) injected."
-
-          # 5. 生成平台 & 再次补刀
-          ns platform add android
-          
-          # 6. 【修正处】修复了之前的空格错误: -type f -print0
-          find platforms/android -name "gradle-wrapper.properties" -type f -exec sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.5-bin.zip|' {} +
-          find platforms/android -name "*.gradle" -type f -print0 | xargs -0 sed -i 's/com.android.tools.build:gradle:[0-9]\.[0-9]\.[0-9]/com.android.tools.build:gradle:8.1.4/g'
-
-          # 7. 生成证书
+          # 9. 生成证书 & 编译
           keytool -genkey -v \
             -keystore debug.keystore \
             -storepass android \
@@ -168,7 +164,6 @@ jobs:
             -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
 
-          # 8. 编译
           ns build android --release \
             --no-hmr \
             --env.abiFilters=arm64-v8a \
