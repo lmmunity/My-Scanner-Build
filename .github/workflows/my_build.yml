@@ -85,9 +85,9 @@ jobs:
           echo "module.exports = function() { console.log('License report skipped by CI override'); };" > $HOOK_FILE
 
       # ----------------------------------------------------------------
-      # 【最终战】升级 AGP & Gradle -> 编译
+      # 【核弹补丁】无差别强制升级 Gradle 8.5 & AGP 8.1.4
       # ----------------------------------------------------------------
-      - name: Final Upgrade & Build
+      - name: Nuclear Gradle Fix
         run: |
           # 1. 删除报错配置
           APP_GRADLE="App_Resources/documentscanner/Android/app.gradle"
@@ -96,14 +96,14 @@ jobs:
           # 2. 初始化平台
           ns platform add android
           
-          # 3. 升级 AGP 到 8.1.4 (只改文件，忽略文件夹)
-          echo "Upgrading AGP to 8.1.4..."
+          # 3. 强制替换所有 .gradle 文件中的 AGP 版本为 8.1.4
+          echo "Force updating AGP to 8.1.4..."
           find . -name "*.gradle" -type f -print0 | xargs -0 sed -i 's/com.android.tools.build:gradle:[0-9]\.[0-9]\.[0-9]/com.android.tools.build:gradle:8.1.4/g'
           
-          # 4. 升级 Gradle 到 8.5
-          echo "Upgrading Gradle Wrapper to 8.5..."
-          find . -name "gradle-wrapper.properties" -type f -print0 | xargs -0 sed -i 's/gradle-7\.5/gradle-8.5/g'
-          find . -name "gradle-wrapper.properties" -type f -print0 | xargs -0 sed -i 's/gradle-7\.[0-9]/gradle-8.5/g'
+          # 4. 强制替换所有 gradle-wrapper.properties 中的 URL 为 8.5
+          # 这一步会扫描 node_modules 和所有子目录，确保无死角
+          echo "Nuking all Gradle Wrappers to 8.5..."
+          find . -name "gradle-wrapper.properties" -type f -exec sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.5-bin.zip|' {} +
           
           # 5. 生成证书
           keytool -genkey -v \
