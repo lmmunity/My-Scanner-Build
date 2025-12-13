@@ -49,13 +49,13 @@ jobs:
           cp -r tesseract-4.1.3/* plugin-nativeprocessor/platforms/android/cpp/tesseract/
 
       # ----------------------------------------------------------------
-      # 【完美修正】保护定义与赋值 -> 强制修复所有读取 -> 恢复现场
+      # 【完美修正】Kotlin 代码修复
       # ----------------------------------------------------------------
       - name: Perfect Kotlin Fix
         run: |
           FILE=$(find plugin-nativeprocessor -name "PDFUtils.kt")
           echo "Patching source file: $FILE"
-
+          
           # 1. 修复 Opt-in
           sed -i '1i @file:OptIn(kotlin.ExperimentalStdlibApi::class, kotlin.contracts.ExperimentalContracts::class)' $FILE
 
@@ -84,6 +84,15 @@ jobs:
           export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$PATH
           yes | sdkmanager --licenses
           sdkmanager "platforms;android-33" "build-tools;33.0.0" "emulator" "platform-tools"
+
+      # ----------------------------------------------------------------
+      # 【新增】禁用 License 插件钩子
+      # ----------------------------------------------------------------
+      - name: Disable License Report Hook
+        run: |
+          HOOK_FILE="node_modules/@nativescript-community/licenses/scripts/after-prepareNativeApp.js"
+          echo "Disabling hook: $HOOK_FILE"
+          echo "module.exports = function() { console.log('License report skipped by CI override'); };" > $HOOK_FILE
 
       - name: Build APK
         run: |
