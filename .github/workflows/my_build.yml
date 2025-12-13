@@ -51,30 +51,43 @@ jobs:
       # ----------------------------------------------------------------
       # 【智能修正】保护变量定义 -> 全局替换调用 -> 恢复定义
       # ----------------------------------------------------------------
-      - name: Final Logic Fix
+      # 【智能修正】只修右值(Read)，不修左值(Write)
+      - name: Smart Kotlin Fix
         run: |
           FILE=$(find plugin-nativeprocessor -name "PDFUtils.kt")
-          echo "Patching: $FILE"
+          echo "Patching source file: $FILE"
           
-          # 1. 修复 Opt-in
+          # 1. 修复 Opt-in (文件头插入注解)
           sed -i '1i @file:OptIn(kotlin.ExperimentalStdlibApi::class, kotlin.contracts.ExperimentalContracts::class)' $FILE
           
-          # 2. 保护定义
-          sed -i 's/val document/val document_SAFE/g' $FILE
-          sed -i 's/var document/var document_SAFE/g' $FILE
-          sed -i 's/document:/document_SAFE:/g' $FILE
+          # 2. 修复方法调用 (document.xxx -> document!!.xxx)
+          # 包含安全调用 ?.
+          sed -i 's/document\./document!!\./g' $FILE
+          sed -i 's/document?\./document!!\./g' $FILE
           
-          # 3. 全局强制非空断言 (利用 \b 匹配单词边界)
-          sed -i 's/\bdocument\b/document!!/g' $FILE
+          # 3. 修复参数传递 (只替换出现在括号里的 document)
+          # 情况: (document)
+          sed -i 's/(document)/(document!!)/g' $FILE
+          # 情况: (document,
+          sed -i 's/(document,/(document!!,/g' $FILE
+          # 情况: , document)
+          sed -i 's/, document)/, document!!)/g' $FILE
+          # 情况: , document,
+          sed -i 's/, document,/, document!!,/g' $FILE
           
-          # 4. 恢复定义
-          sed -i 's/document_SAFE/document/g' $FILE
+          # 4. 修复赋值语句的右边 ( ... = document)
+          # 注意：这里匹配 "空格=空格document"，防止匹配到 "val document ="
+          sed -i 's/ = document/ = document!!/g' $FILE
           
-          # 5. 双保险 Gradle 配置
+          # 5. 修复返回值 (return document)
+          sed -i 's/return document/return document!!/g' $FILE
+
+          # 6. 双保险 Gradle 配置
           GRADLE_CONFIG="plugin-nativeprocessor/platforms/android/include.gradle"
           mkdir -p $(dirname $GRADLE_CONFIG)
           echo 'android { kotlinOptions { freeCompilerArgs += ["-Xopt-in=kotlin.ExperimentalStdlibApi", "-Xopt-in=kotlin.contracts.ExperimentalContracts"] } }' >> $GRADLE_CONFIG
-
+          
+          echo "Smart patch applied."
       - name: Install Android SDK 33
         run: |
           echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
