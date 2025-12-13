@@ -89,81 +89,100 @@ jobs:
       # ----------------------------------------------------------------
       # 【终极必杀】自动修复所有插件的 AGP 8.x 兼容性问题 (Namespace + BuildConfig)
       # 【双重必杀】自动注入 Namespace + 强制升级 Java 17 (解决 JVM Target 冲突)
-      - name: JVM & Namespace Fix
+      # 【终极同步】全格式覆盖 Java 1.8 -> 17 + Namespace 自动注入
+      - name: Final Version Sync
         run: |
           # ---------------------------------------------------------------------
-          # 1. 基础环境修复 (Gradle 8.5 + AGP 8.1.4)
+          # 1. 基础清理与准备
+          # ---------------------------------------------------------------------
+          rm -rf platforms node_modules/package-lock.json
+          
+          # ---------------------------------------------------------------------
+          # 2. 全面升级 Gradle/AGP (CLI + Local)
           # ---------------------------------------------------------------------
           NPM_ROOT=$(npm root -g)
-          echo "Patching Global CLI templates..."
-          find "$NPM_ROOT" -name "gradle-wrapper.properties" -type f -exec sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.5-bin.zip|' {} +
-          find "$NPM_ROOT" -name "*.gradle" -type f -print0 | xargs -0 sed -i 's/com.android.tools.build:gradle:[0-9]\.[0-9]\.[0-9]/com.android.tools.build:gradle:8.1.4/g'
-          
-          echo "Patching local Gradle Wrappers..."
-          find node_modules -name "gradle-wrapper.properties" -type f -exec sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.5-bin.zip|' {} +
-          
-          # ---------------------------------------------------------------------
-          # 2. 【核心大招 A】强制升级 Java 1.8 -> Java 17
-          # ---------------------------------------------------------------------
-          echo "Forcing Java 17 compatibility..."
-          # 替换 JavaVersion.VERSION_1_8 -> JavaVersion.VERSION_17
-          find node_modules App_Resources -name "*.gradle" -type f -print0 | xargs -0 sed -i 's/JavaVersion.VERSION_1_8/JavaVersion.VERSION_17/g'
-          # 替换 "1.8" -> "17" (针对 sourceCompatibility 1.8 这种写法)
-          find node_modules App_Resources -name "*.gradle" -type f -print0 | xargs -0 sed -i 's/sourceCompatibility 1\.8/sourceCompatibility 17/g'
-          find node_modules App_Resources -name "*.gradle" -type f -print0 | xargs -0 sed -i 's/targetCompatibility 1\.8/targetCompatibility 17/g'
-          # 替换 Kotlin 的 jvmTarget
-          find node_modules App_Resources -name "*.gradle" -type f -print0 | xargs -0 sed -i "s/jvmTarget = '1.8'/jvmTarget = '17'/g"
-          find node_modules App_Resources -name "*.gradle" -type f -print0 | xargs -0 sed -i 's/jvmTarget = "1.8"/jvmTarget = "17"/g'
+          echo "Patching Global & Local Gradle..."
+          # 替换全局和本地的 wrapper 为 8.5
+          find "$NPM_ROOT" node_modules -name "gradle-wrapper.properties" -type f -exec sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.5-bin.zip|' {} +
+          # 替换全局和本地的 AGP 为 8.1.4
+          find "$NPM_ROOT" node_modules -name "*.gradle" -type f -print0 | xargs -0 sed -i 's/com.android.tools.build:gradle:[0-9]\.[0-9]\.[0-9]/com.android.tools.build:gradle:8.1.4/g'
 
           # ---------------------------------------------------------------------
-          # 3. 【核心大招 B】自动注入 Namespace
+          # 3. 【核心修复】强制升级 Java 1.8 -> 17 (覆盖所有可能的写法)
           # ---------------------------------------------------------------------
-          echo "Auto-injecting namespaces..."
+          echo "Force-updating Java 1.8 to 17 in ALL files..."
+          
+          # 目标目录
+          TARGET_DIRS="node_modules App_Resources"
+          
+          # 写法 A: JavaVersion.VERSION_1_8
+          find $TARGET_DIRS -name "*.gradle" -type f -print0 | xargs -0 sed -i 's/JavaVersion.VERSION_1_8/JavaVersion.VERSION_17/g'
+          
+          # 写法 B: sourceCompatibility 1.8 (无符号/带引号)
+          find $TARGET_DIRS -name "*.gradle" -type f -print0 | xargs -0 sed -i "s/sourceCompatibility 1.8/sourceCompatibility 17/g"
+          find $TARGET_DIRS -name "*.gradle" -type f -print0 | xargs -0 sed -i "s/sourceCompatibility '1.8'/sourceCompatibility '17'/g"
+          find $TARGET_DIRS -name "*.gradle" -type f -print0 | xargs -0 sed -i 's/sourceCompatibility "1.8"/sourceCompatibility "17"/g'
+          
+          # 写法 C: sourceCompatibility = 1.8 (带等号) <--- 之前漏了这个！
+          find $TARGET_DIRS -name "*.gradle" -type f -print0 | xargs -0 sed -i "s/sourceCompatibility = 1.8/sourceCompatibility = 17/g"
+          find $TARGET_DIRS -name "*.gradle" -type f -print0 | xargs -0 sed -i "s/sourceCompatibility = '1.8'/sourceCompatibility = '17'/g"
+          find $TARGET_DIRS -name "*.gradle" -type f -print0 | xargs -0 sed -i 's/sourceCompatibility = "1.8"/sourceCompatibility = "17"/g'
+          
+          # 写法 D: targetCompatibility (同上)
+          find $TARGET_DIRS -name "*.gradle" -type f -print0 | xargs -0 sed -i "s/targetCompatibility = 1.8/targetCompatibility = 17/g"
+          find $TARGET_DIRS -name "*.gradle" -type f -print0 | xargs -0 sed -i "s/targetCompatibility 1.8/targetCompatibility 17/g"
+          find $TARGET_DIRS -name "*.gradle" -type f -print0 | xargs -0 sed -i "s/targetCompatibility '1.8'/targetCompatibility '17'/g"
+          
+          # 写法 E: Kotlin jvmTarget
+          find $TARGET_DIRS -name "*.gradle" -type f -print0 | xargs -0 sed -i "s/jvmTarget = '1.8'/jvmTarget = '17'/g"
+          find $TARGET_DIRS -name "*.gradle" -type f -print0 | xargs -0 sed -i 's/jvmTarget = "1.8"/jvmTarget = "17"/g'
+
+          # ---------------------------------------------------------------------
+          # 4. 自动注入 Namespace (解决 AGP 8.0 报错)
+          # ---------------------------------------------------------------------
+          echo "Injecting Namespaces..."
           find node_modules -name "AndroidManifest.xml" | while read manifest; do
             dir=$(dirname "$manifest")
             gradleFile="$dir/build.gradle"
             if [ -f "$gradleFile" ]; then
               pkg=$(grep -o 'package="[^"]*"' "$manifest" | cut -d'"' -f2)
-              if [ ! -z "$pkg" ] && ! grep -q "namespace" "$gradleFile"; then
-                 echo "Injecting namespace '$pkg' into $gradleFile"
-                 sed -i "s/android {/android { namespace '$pkg'/g" "$gradleFile"
-                 sed -i "s/android {/android { buildFeatures { buildConfig = true }/g" "$gradleFile"
+              # 只有当 pkg 不为空且 gradle 文件存在时才注入
+              if [ ! -z "$pkg" ]; then
+                 # 简单粗暴注入：只要有 android { 就尝试注入 namespace
+                 # 加上 grep 检查防止重复注入
+                 if ! grep -q "namespace" "$gradleFile"; then
+                    sed -i "s/android {/android { namespace '$pkg'/g" "$gradleFile"
+                    # 顺手开启 buildConfig
+                    sed -i "s/android {/android { buildFeatures { buildConfig = true }/g" "$gradleFile"
+                 fi
               fi
             fi
           done
 
           # ---------------------------------------------------------------------
-          # 4. 清理旧配置 & 统一 AGP
+          # 5. 清理旧配置 (generateReleaseBuildConfig)
           # ---------------------------------------------------------------------
-          echo "Cleanup & Finalize..."
           find node_modules -name "*.gradle" -type f -exec sed -i '/generateReleaseBuildConfig/d' {} +
           sed -i '/generateLocaleConfig/d' "App_Resources/documentscanner/Android/app.gradle"
-          find node_modules -name "*.gradle" -type f -print0 | xargs -0 sed -i 's/com.android.tools.build:gradle:[0-9]\.[0-9]\.[0-9]/com.android.tools.build:gradle:8.1.4/g'
 
-          # 5. 初始化平台
+          # ---------------------------------------------------------------------
+          # 6. 生成平台 & 再次补刀 (Double-tap)
+          # ---------------------------------------------------------------------
           ns platform add android
           
-          # 6. 【补刀】检查生成的 platforms 目录
-          echo "Sanitizing platforms directory..."
-          # 再次执行 Java 17 替换
+          echo "Sanitizing generated platforms directory..."
+          # 把生成的 platforms 目录里的 1.8 也统统改成 17
           find platforms/android -name "*.gradle" -type f -print0 | xargs -0 sed -i 's/JavaVersion.VERSION_1_8/JavaVersion.VERSION_17/g'
-          find platforms/android -name "*.gradle" -type f -print0 | xargs -0 sed -i "s/jvmTarget = '1.8'/jvmTarget = '17'/g"
-          # 再次执行 Namespace 注入
-          find platforms/android -name "AndroidManifest.xml" | while read manifest; do
-            dir=$(dirname "$manifest")
-            gradleFile="$dir/build.gradle"
-            if [ -f "$gradleFile" ]; then
-              pkg=$(grep -o 'package="[^"]*"' "$manifest" | cut -d'"' -f2)
-              if [ ! -z "$pkg" ] && ! grep -q "namespace" "$gradleFile"; then
-                 sed -i "s/android {/android { namespace '$pkg'/g" "$gradleFile"
-              fi
-            fi
-          done
-          # 再次确保 Gradle/AGP 版本
+          find platforms/android -name "*.gradle" -type f -print0 | xargs -0 sed -i "s/sourceCompatibility = 1.8/sourceCompatibility = 17/g"
+          find platforms/android -name "*.gradle" -type f -print0 | xargs -0 sed -i "s/targetCompatibility = 1.8/targetCompatibility = 17/g"
+          
+          # 确保 AGP 和 Gradle 正确
+          find platforms/android -name "*.gradle" -type f -print0 | xargs -0 sed -i 's/com.android.tools.build:gradle:[0-9]\.[0-9]\.[0-9]/com.android.tools.build:gradle:8.1.4/g'
           find platforms/android -name "gradle-wrapper.properties" -type f -exec sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.5-bin.zip|' {} +
-          find platforms/android -type f -print0 | xargs -0 sed -i 's/com.android.tools.build:gradle:[0-9]\.[0-9]\.[0-9]/com.android.tools.build:gradle:8.1.4/g'
 
-          # 7. 生成证书
+          # ---------------------------------------------------------------------
+          # 7. 编译
+          # ---------------------------------------------------------------------
           keytool -genkey -v \
             -keystore debug.keystore \
             -storepass android \
@@ -174,7 +193,6 @@ jobs:
             -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
 
-          # 8. 编译
           ns build android --release \
             --no-hmr \
             --env.abiFilters=arm64-v8a \
@@ -183,6 +201,12 @@ jobs:
             --key-store-password android \
             --key-store-alias androiddebugkey \
             --key-store-alias-password android
+          
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release
+          path: platforms/android/app/build/outputs/apk/release/*.apk
           
       - name: Upload APK
         uses: actions/upload-artifact@v4
