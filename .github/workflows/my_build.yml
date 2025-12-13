@@ -30,7 +30,7 @@ jobs:
           npx ts-patch install -s
 
       # ----------------------------------------------------------------
-      # 手动填充原生依赖
+      # 手动填充原生依赖 (OpenCV + Tesseract)
       # ----------------------------------------------------------------
       - name: Download OpenCV
         run: |
@@ -84,7 +84,9 @@ jobs:
           echo "Disabling hook: $HOOK_FILE"
           echo "module.exports = function() { console.log('License report skipped by CI override'); };" > $HOOK_FILE
 
-      # 【修正上帝模式】修复 Groovy 语法，确保 Init 脚本能正常运行
+      # ----------------------------------------------------------------
+      # 【修正上帝模式】修复空格遗漏和 Groovy 语法
+      # ----------------------------------------------------------------
       - name: Final Groovy Fix
         run: |
           # 1. 基础清理
@@ -97,7 +99,7 @@ jobs:
           echo "Patching AGP versions..."
           find "$NPM_ROOT" node_modules -name "*.gradle" -type f -print0 | xargs -0 sed -i 's/com.android.tools.build:gradle:[0-9]\.[0-9]\.[0-9]/com.android.tools.build:gradle:8.1.4/g'
 
-          # 3. 自动注入 Namespace & 清理旧配置 (保留，确保 AGP 8.0+ 兼容性)
+          # 3. 自动注入 Namespace & 清理旧配置
           echo "Injecting Namespaces & Cleaning Obsolete Configs..."
           find node_modules -name "AndroidManifest.xml" | while read manifest; do
             dir=$(dirname "$manifest")
@@ -113,9 +115,9 @@ jobs:
           find node_modules -name "*.gradle" -type f -exec sed -i '/generateReleaseBuildConfig/d' {} +
           sed -i '/generateLocaleConfig/d' "App_Resources/documentscanner/Android/app.gradle"
 
-          # 4. 【核心大招：Groovy 语法修正】创建 Gradle 初始化脚本
+          # 4. 【核心大招】创建 Gradle 初始化脚本
+          # 使用 Class.forName 避免 Groovy 解析 org 为变量
           mkdir -p ~/.gradle/init.d
-          # 关键变化：tasks.withType((...) as Class) 修正 Groovy 语法
           cat > ~/.gradle/init.d/force-java17.gradle <<EOF
           allprojects {
               afterEvaluate { project ->
@@ -132,23 +134,28 @@ jobs:
                       sourceCompatibility = JavaVersion.VERSION_17
                       targetCompatibility = JavaVersion.VERSION_17
                   }
-                  // Kotlin Compile tasks (Groovy/Kotlin compile fix)
-                  tasks.withType(Class.forName('org.jetbrains.kotlin.gradle.tasks.KotlinCompile')).configureEach {
-                      kotlinOptions {
-                          jvmTarget = "17"
+                  // Kotlin Compile tasks
+                  try {
+                      def kotlinCompileClass = Class.forName('org.jetbrains.kotlin.gradle.tasks.KotlinCompile')
+                      tasks.withType(kotlinCompileClass).configureEach {
+                          kotlinOptions {
+                              jvmTarget = "17"
+                          }
                       }
+                  } catch (ClassNotFoundException e) {
+                      // Ignore if Kotlin plugin is not applied
                   }
               }
           }
           EOF
-          echo "Gradle Init Script (Groovy Fixed) injected."
+          echo "Gradle Init Script (Safe Mode) injected."
 
           # 5. 生成平台 & 再次补刀
           ns platform add android
           
-          # 6. 再次确保 platforms 里的 wrapper 是 8.5
+          # 6. 【修正处】修复了之前的空格错误: -type f -print0
           find platforms/android -name "gradle-wrapper.properties" -type f -exec sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.5-bin.zip|' {} +
-          find platforms/android -name "*.gradle" -type f-print0 | xargs -0 sed -i 's/com.android.tools.build:gradle:[0-9]\.[0-9]\.[0-9]/com.android.tools.build:gradle:8.1.4/g'
+          find platforms/android -name "*.gradle" -type f -print0 | xargs -0 sed -i 's/com.android.tools.build:gradle:[0-9]\.[0-9]\.[0-9]/com.android.tools.build:gradle:8.1.4/g'
 
           # 7. 生成证书
           keytool -genkey -v \
@@ -170,42 +177,6 @@ jobs:
             --key-store-password android \
             --key-store-alias androiddebugkey \
             --key-store-alias-password android
-          
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: app-release
-          path: platforms/android/app/build/outputs/apk/release/*.apk
-          
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: app-release
-          path: platforms/android/app/build/outputs/apk/release/*.apk
-          
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: app-release
-          path: platforms/android/app/build/outputs/apk/release/*.apk
-          
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: app-release
-          path: platforms/android/app/build/outputs/apk/release/*.apk
-          
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: app-release
-          path: platforms/android/app/build/outputs/apk/release/*.apk
-          
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: app-release
-          path: platforms/android/app/build/outputs/apk/release/*.apk
           
       - name: Upload APK
         uses: actions/upload-artifact@v4
