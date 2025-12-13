@@ -87,34 +87,81 @@ jobs:
       # ----------------------------------------------------------------
       # 【降维打击】修改全局 NPM 目录下的 CLI 模板 (根治 Gradle 版本问题)
       # ----------------------------------------------------------------
-      - name: Global CLI Patch
+      # 【终极必杀】自动修复所有插件的 AGP 8.x 兼容性问题 (Namespace + BuildConfig)
+      - name: Plugin Compatibility Patch
         run: |
-          # 1. 找到 npm 全局安装路径
+          # ---------------------------------------------------------------------
+          # 1. 基础环境修复 (CLI 全局模板 + 本地配置)
+          # ---------------------------------------------------------------------
           NPM_ROOT=$(npm root -g)
-          echo "Global NPM Root: $NPM_ROOT"
-          
-          # 2. 修改全局 CLI 模板 (Gradle 7.5 -> 8.5)
-          echo "Patching Global CLI templates..."
+          echo "Patching Global CLI templates in $NPM_ROOT..."
           find "$NPM_ROOT" -name "gradle-wrapper.properties" -type f -exec sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.5-bin.zip|' {} +
-          # 修改全局 CLI 模板 (AGP -> 8.1.4)
           find "$NPM_ROOT" -name "*.gradle" -type f -print0 | xargs -0 sed -i 's/com.android.tools.build:gradle:[0-9]\.[0-9]\.[0-9]/com.android.tools.build:gradle:8.1.4/g'
           
-          # 3. 修复本地项目配置
-          sed -i '/generateLocaleConfig/d' "App_Resources/documentscanner/Android/app.gradle"
-          
-          # 4. 修复本地 node_modules
-          echo "Patching local node_modules..."
+          echo "Patching local Gradle Wrappers..."
           find node_modules -name "gradle-wrapper.properties" -type f -exec sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.5-bin.zip|' {} +
+          
+          # ---------------------------------------------------------------------
+          # 2. 【核心大招】自动注入 namespace (解决 Namespace not specified 报错)
+          # ---------------------------------------------------------------------
+          echo "Auto-injecting namespaces into plugins..."
+          # 遍历所有插件的 AndroidManifest.xml
+          find node_modules -name "AndroidManifest.xml" | while read manifest; do
+            dir=$(dirname "$manifest")
+            gradleFile="$dir/build.gradle"
+            
+            # 如果存在 build.gradle，说明这是一个安卓库模块
+            if [ -f "$gradleFile" ]; then
+              # 从 Manifest 中提取 package="xxx.xxx"
+              pkg=$(grep -o 'package="[^"]*"' "$manifest" | cut -d'"' -f2)
+              
+              if [ ! -z "$pkg" ]; then
+                 # 如果 gradle 文件里还没写 namespace，我们就注入进去
+                 if ! grep -q "namespace" "$gradleFile"; then
+                    echo "Injecting namespace '$pkg' into $gradleFile"
+                    # 在 'android {' 后面插入 'namespace "xxx"'
+                    sed -i "s/android {/android { namespace '$pkg'/g" "$gradleFile"
+                    # 同时开启 buildConfig (AGP 8 默认关闭，老插件可能需要)
+                    sed -i "s/android {/android { buildFeatures { buildConfig = true }/g" "$gradleFile"
+                 fi
+              fi
+            fi
+          done
+
+          # ---------------------------------------------------------------------
+          # 3. 清理过时的 Gradle 配置 (解决 generateReleaseBuildConfig 报错)
+          # ---------------------------------------------------------------------
+          echo "Removing obsolete Gradle properties..."
+          # generateReleaseBuildConfig 在 AGP 8 中已被移除，必须删掉
+          find node_modules -name "*.gradle" -type f -exec sed -i '/generateReleaseBuildConfig/d' {} +
+          # 修复 locale 配置报错
+          sed -i '/generateLocaleConfig/d' "App_Resources/documentscanner/Android/app.gradle"
+
+          # ---------------------------------------------------------------------
+          # 4. 统一升级 AGP 版本
+          # ---------------------------------------------------------------------
+          echo "Force updating AGP versions in node_modules..."
           find node_modules -name "*.gradle" -type f -print0 | xargs -0 sed -i 's/com.android.tools.build:gradle:[0-9]\.[0-9]\.[0-9]/com.android.tools.build:gradle:8.1.4/g'
-          grep -rl "7\.4\.2" node_modules App_Resources | xargs sed -i 's/7\.4\.2/8.1.4/g' || true
 
           # 5. 初始化平台
           ns platform add android
           
-          # 6. 清洗 platforms 目录 (三重保险)
+          # 6. 【补刀】再次清洗生成的 platforms 目录 (防止漏网之鱼)
           echo "Sanitizing platforms directory..."
           find platforms/android -name "gradle-wrapper.properties" -type f -exec sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.5-bin.zip|' {} +
           find platforms/android -type f -print0 | xargs -0 sed -i 's/com.android.tools.build:gradle:[0-9]\.[0-9]\.[0-9]/com.android.tools.build:gradle:8.1.4/g'
+          # 对生成的平台文件也执行一次 namespace 注入 (保险起见)
+          find platforms/android -name "AndroidManifest.xml" | while read manifest; do
+            dir=$(dirname "$manifest")
+            gradleFile="$dir/build.gradle"
+            if [ -f "$gradleFile" ]; then
+              pkg=$(grep -o 'package="[^"]*"' "$manifest" | cut -d'"' -f2)
+              if [ ! -z "$pkg" ] && ! grep -q "namespace" "$gradleFile"; then
+                 echo "Injecting namespace '$pkg' into platform file $gradleFile"
+                 sed -i "s/android {/android { namespace '$pkg'/g" "$gradleFile"
+              fi
+            fi
+          done
 
           # 7. 生成证书
           keytool -genkey -v \
@@ -136,6 +183,12 @@ jobs:
             --key-store-password android \
             --key-store-alias androiddebugkey \
             --key-store-alias-password android
+          
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release
+          path: platforms/android/app/build/outputs/apk/release/*.apk
           
       - name: Upload APK
         uses: actions/upload-artifact@v4
