@@ -84,8 +84,8 @@ jobs:
           echo "Disabling hook: $HOOK_FILE"
           echo "module.exports = function() { console.log('License report skipped by CI override'); };" > $HOOK_FILE
 
-      # 【上帝模式】注入 Gradle Init 脚本，运行时强制覆盖所有 JVM 版本配置
-      - name: God Mode Build
+      # 【修正上帝模式】修复 Groovy 语法，确保 Init 脚本能正常运行
+      - name: Final Groovy Fix
         run: |
           # 1. 基础清理
           rm -rf platforms node_modules/package-lock.json
@@ -97,28 +97,25 @@ jobs:
           echo "Patching AGP versions..."
           find "$NPM_ROOT" node_modules -name "*.gradle" -type f -print0 | xargs -0 sed -i 's/com.android.tools.build:gradle:[0-9]\.[0-9]\.[0-9]/com.android.tools.build:gradle:8.1.4/g'
 
-          # 3. 自动注入 Namespace (解决 AGP 8.0 报错)
-          echo "Injecting Namespaces..."
+          # 3. 自动注入 Namespace & 清理旧配置 (保留，确保 AGP 8.0+ 兼容性)
+          echo "Injecting Namespaces & Cleaning Obsolete Configs..."
           find node_modules -name "AndroidManifest.xml" | while read manifest; do
             dir=$(dirname "$manifest")
             gradleFile="$dir/build.gradle"
             if [ -f "$gradleFile" ] && grep -q "package=" "$manifest"; then
               pkg=$(grep -o 'package="[^"]*"' "$manifest" | cut -d'"' -f2 | head -1)
               if [ ! -z "$pkg" ] && ! grep -q "namespace" "$gradleFile"; then
-                 # 注入 namespace 并开启 buildConfig
                  sed -i "s/android {/android { namespace '$pkg'/g" "$gradleFile"
                  sed -i "s/android {/android { buildFeatures { buildConfig = true }/g" "$gradleFile"
               fi
             fi
           done
-
-          # 4. 清理旧配置
           find node_modules -name "*.gradle" -type f -exec sed -i '/generateReleaseBuildConfig/d' {} +
           sed -i '/generateLocaleConfig/d' "App_Resources/documentscanner/Android/app.gradle"
 
-          # 5. 【核心大招】创建 Gradle 初始化脚本 (init.gradle)
-          # 这段脚本会在 Gradle 运行时动态覆盖所有配置，比 sed 替换更彻底、更无敌
+          # 4. 【核心大招：Groovy 语法修正】创建 Gradle 初始化脚本
           mkdir -p ~/.gradle/init.d
+          # 关键变化：tasks.withType((...) as Class) 修正 Groovy 语法
           cat > ~/.gradle/init.d/force-java17.gradle <<EOF
           allprojects {
               afterEvaluate { project ->
@@ -130,11 +127,13 @@ jobs:
                           }
                       }
                   }
+                  // Java Compile tasks
                   tasks.withType(JavaCompile).configureEach {
                       sourceCompatibility = JavaVersion.VERSION_17
                       targetCompatibility = JavaVersion.VERSION_17
                   }
-                  tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+                  // Kotlin Compile tasks (Groovy/Kotlin compile fix)
+                  tasks.withType(Class.forName('org.jetbrains.kotlin.gradle.tasks.KotlinCompile')).configureEach {
                       kotlinOptions {
                           jvmTarget = "17"
                       }
@@ -142,16 +141,16 @@ jobs:
               }
           }
           EOF
-          echo "Gradle Init Script injected."
+          echo "Gradle Init Script (Groovy Fixed) injected."
 
-          # 6. 生成平台 (无需再手动替换 platforms 里的文件了，init.gradle 会搞定一切)
+          # 5. 生成平台 & 再次补刀
           ns platform add android
           
-          # 7. 再次确保 platforms 里的 wrapper 是 8.5 (Wrapper 还是得物理替换)
+          # 6. 再次确保 platforms 里的 wrapper 是 8.5
           find platforms/android -name "gradle-wrapper.properties" -type f -exec sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.5-bin.zip|' {} +
-          find platforms/android -name "*.gradle" -type f -print0 | xargs -0 sed -i 's/com.android.tools.build:gradle:[0-9]\.[0-9]\.[0-9]/com.android.tools.build:gradle:8.1.4/g'
+          find platforms/android -name "*.gradle" -type f-print0 | xargs -0 sed -i 's/com.android.tools.build:gradle:[0-9]\.[0-9]\.[0-9]/com.android.tools.build:gradle:8.1.4/g'
 
-          # 8. 生成证书
+          # 7. 生成证书
           keytool -genkey -v \
             -keystore debug.keystore \
             -storepass android \
@@ -162,7 +161,7 @@ jobs:
             -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
 
-          # 9. 编译
+          # 8. 编译
           ns build android --release \
             --no-hmr \
             --env.abiFilters=arm64-v8a \
@@ -171,6 +170,12 @@ jobs:
             --key-store-password android \
             --key-store-alias androiddebugkey \
             --key-store-alias-password android
+          
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release
+          path: platforms/android/app/build/outputs/apk/release/*.apk
           
       - name: Upload APK
         uses: actions/upload-artifact@v4
