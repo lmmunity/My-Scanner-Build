@@ -85,32 +85,37 @@ jobs:
           echo "module.exports = function() { console.log('License report skipped by CI override'); };" > $HOOK_FILE
 
       # ----------------------------------------------------------------
-      # 【最终绝杀】生成平台后 -> 强制替换 AGP 7.4.2 -> 编译
+      # 【焦土政策】全地图无死角替换 Gradle/AGP 版本
       # ----------------------------------------------------------------
-      - name: Final Post-Gen Fix
+      - name: Universal Version Override
         run: |
-          # 1. 修复主项目 app.gradle
+          # 1. 修复主项目 App_Resources (这是源头！)
+          echo "Nuking 7.4.2 in App_Resources..."
+          find App_Resources -type f -exec sed -i 's/7\.4\.2/8.1.4/g' {} +
+          find App_Resources -type f -exec sed -i 's/gradle-7\.5/gradle-8.5/g' {} +
+          
+          # 2. 修复 app.gradle 里的报错配置
           APP_GRADLE="App_Resources/documentscanner/Android/app.gradle"
           sed -i '/generateLocaleConfig/d' $APP_GRADLE
           
-          # 2. 先生成安卓平台
+          # 3. 清洗 node_modules
+          echo "Nuking 7.4.2 in node_modules..."
+          find node_modules -type f -name "*.gradle" -exec sed -i 's/7\.4\.2/8.1.4/g' {} +
+          find node_modules -type f -name "*.gradle" -print0 | xargs -0 sed -i 's/com.android.tools.build:gradle:7\.[0-9.]\+/com.android.tools.build:gradle:8.1.4/g'
+          
+          # 4. 强制升级 Gradle Wrapper (node_modules)
+          echo "Upgrading Wrappers in node_modules..."
+          find node_modules -name "gradle-wrapper.properties" -type f -exec sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.5-bin.zip|' {} +
+
+          # 5. 生成平台
           ns platform add android
           
-          # 3. 【精准替换】把生成的 build.gradle 里的 7.4.2 换成 8.1.4
-          echo "Replacing AGP 7.4.2 with 8.1.4 in platforms/android..."
-          # 针对性替换 classpath
-          find platforms/android -name "build.gradle" -type f -print0 | xargs -0 sed -i 's/com.android.tools.build:gradle:7\.[0-9.]\+/com.android.tools.build:gradle:8.1.4/g'
-          # 全局替换 7.4.2 字符串 (防止漏网之鱼)
-          find platforms/android -type f -name "*.gradle" -print0 | xargs -0 sed -i 's/7\.4\.2/8.1.4/g'
-
-          # 4. 再次确保 Gradle Wrapper 是 8.5
+          # 6. 【双保险】再次清洗生成的 platforms 目录
+          echo "Double tapping platforms directory..."
+          find platforms/android -type f -print0 | xargs -0 sed -i 's/7\.4\.2/8.1.4/g'
           find platforms/android -name "gradle-wrapper.properties" -type f -exec sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.5-bin.zip|' {} +
-          
-          # 5. 打印验证
-          echo "=== Checking patched build.gradle ==="
-          grep "com.android.tools.build:gradle" platforms/android/build.gradle || true
 
-          # 6. 生成证书
+          # 7. 生成证书
           keytool -genkey -v \
             -keystore debug.keystore \
             -storepass android \
@@ -121,7 +126,7 @@ jobs:
             -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
 
-          # 7. 编译
+          # 8. 编译
           ns build android --release \
             --no-hmr \
             --env.abiFilters=arm64-v8a \
