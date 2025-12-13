@@ -87,23 +87,23 @@ jobs:
       # ----------------------------------------------------------------
       # 【最终战】升级 AGP & Gradle -> 编译
       # ----------------------------------------------------------------
-      - name: Upgrade AGP & Build
+      - name: Final Upgrade & Build
         run: |
           # 1. 删除报错配置
           APP_GRADLE="App_Resources/documentscanner/Android/app.gradle"
           sed -i '/generateLocaleConfig/d' $APP_GRADLE
           
-          # 2. 初始化
+          # 2. 初始化平台
           ns platform add android
           
-          # 3. 升级 AGP 到 8.1.4 (匹配 Gradle 8.5)
+          # 3. 升级 AGP 到 8.1.4 (只改文件，忽略文件夹)
           echo "Upgrading AGP to 8.1.4..."
-          find . -name "*.gradle" -print0 | xargs -0 sed -i 's/com.android.tools.build:gradle:[0-9]\.[0-9]\.[0-9]/com.android.tools.build:gradle:8.1.4/g'
+          find . -name "*.gradle" -type f -print0 | xargs -0 sed -i 's/com.android.tools.build:gradle:[0-9]\.[0-9]\.[0-9]/com.android.tools.build:gradle:8.1.4/g'
           
           # 4. 升级 Gradle 到 8.5
           echo "Upgrading Gradle Wrapper to 8.5..."
-          find . -name "gradle-wrapper.properties" -print0 | xargs -0 sed -i 's/gradle-7\.5/gradle-8.5/g'
-          find . -name "gradle-wrapper.properties" -print0 | xargs -0 sed -i 's/gradle-7\.[0-9]/gradle-8.5/g'
+          find . -name "gradle-wrapper.properties" -type f -print0 | xargs -0 sed -i 's/gradle-7\.5/gradle-8.5/g'
+          find . -name "gradle-wrapper.properties" -type f -print0 | xargs -0 sed -i 's/gradle-7\.[0-9]/gradle-8.5/g'
           
           # 5. 生成证书
           keytool -genkey -v \
