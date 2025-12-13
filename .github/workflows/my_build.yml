@@ -85,35 +85,32 @@ jobs:
           echo "module.exports = function() { console.log('License report skipped by CI override'); };" > $HOOK_FILE
 
       # ----------------------------------------------------------------
-      # 【焦土政策】全地图无死角替换 Gradle/AGP 版本
+      # 【绝杀】无差别全域替换 (Grep & Destroy)
       # ----------------------------------------------------------------
-      - name: Universal Version Override
+      - name: Omni-Replace Strategy
         run: |
-          # 1. 修复主项目 App_Resources (这是源头！)
-          echo "Nuking 7.4.2 in App_Resources..."
-          find App_Resources -type f -exec sed -i 's/7\.4\.2/8.1.4/g' {} +
-          find App_Resources -type f -exec sed -i 's/gradle-7\.5/gradle-8.5/g' {} +
+          # 1. 修复主项目配置
+          sed -i '/generateLocaleConfig/d' "App_Resources/documentscanner/Android/app.gradle"
           
-          # 2. 修复 app.gradle 里的报错配置
-          APP_GRADLE="App_Resources/documentscanner/Android/app.gradle"
-          sed -i '/generateLocaleConfig/d' $APP_GRADLE
+          # 2. 替换 node_modules 和 App_Resources 里的 Gradle 版本
+          echo "Replacing gradle-7.5 with gradle-8.5 globally..."
+          grep -rl "gradle-7\.5" node_modules App_Resources | xargs sed -i 's/gradle-7\.5/gradle-8.5/g' || true
           
-          # 3. 清洗 node_modules
-          echo "Nuking 7.4.2 in node_modules..."
-          find node_modules -type f -name "*.gradle" -exec sed -i 's/7\.4\.2/8.1.4/g' {} +
-          find node_modules -type f -name "*.gradle" -print0 | xargs -0 sed -i 's/com.android.tools.build:gradle:7\.[0-9.]\+/com.android.tools.build:gradle:8.1.4/g'
+          # 3. 替换 node_modules 和 App_Resources 里的 AGP 版本
+          echo "Replacing 7.4.2 with 8.1.4 globally..."
+          grep -rl "7\.4\.2" node_modules App_Resources | xargs sed -i 's/7\.4\.2/8.1.4/g' || true
           
-          # 4. 强制升级 Gradle Wrapper (node_modules)
-          echo "Upgrading Wrappers in node_modules..."
-          find node_modules -name "gradle-wrapper.properties" -type f -exec sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.5-bin.zip|' {} +
+          # 4. 强制覆盖所有 distributionUrl
+          echo "Force patching distributionUrls..."
+          grep -rl "distributionUrl" node_modules | xargs sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.5-bin.zip|' || true
 
-          # 5. 生成平台
+          # 5. 初始化平台
           ns platform add android
           
-          # 6. 【双保险】再次清洗生成的 platforms 目录
-          echo "Double tapping platforms directory..."
-          find platforms/android -type f -print0 | xargs -0 sed -i 's/7\.4\.2/8.1.4/g'
-          find platforms/android -name "gradle-wrapper.properties" -type f -exec sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.5-bin.zip|' {} +
+          # 6. 再次检查生成的 platforms 目录
+          echo "Double checking platforms directory..."
+          grep -rl "gradle-7\.5" platforms/android | xargs sed -i 's/gradle-7\.5/gradle-8.5/g' || true
+          grep -rl "7\.4\.2" platforms/android | xargs sed -i 's/7\.4\.2/8.1.4/g' || true
 
           # 7. 生成证书
           keytool -genkey -v \
