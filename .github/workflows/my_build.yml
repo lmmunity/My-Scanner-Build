@@ -85,23 +85,27 @@ jobs:
           echo "module.exports = function() { console.log('License report skipped by CI override'); };" > $HOOK_FILE
 
       # ----------------------------------------------------------------
-      # 【最终战】修正配置 -> 升级 Gradle -> 编译
+      # 【最终战】升级 AGP & Gradle -> 编译
       # ----------------------------------------------------------------
-      - name: Upgrade Gradle & Build
+      - name: Upgrade AGP & Build
         run: |
-          # 1. 删除 app.gradle 中导致报错的行
+          # 1. 删除报错配置
           APP_GRADLE="App_Resources/documentscanner/Android/app.gradle"
           sed -i '/generateLocaleConfig/d' $APP_GRADLE
           
-          # 2. 初始化平台
+          # 2. 初始化
           ns platform add android
           
-          # 3. 升级 Gradle 到 8.5
+          # 3. 升级 AGP 到 8.1.4 (匹配 Gradle 8.5)
+          echo "Upgrading AGP to 8.1.4..."
+          find . -name "*.gradle" -print0 | xargs -0 sed -i 's/com.android.tools.build:gradle:[0-9]\.[0-9]\.[0-9]/com.android.tools.build:gradle:8.1.4/g'
+          
+          # 4. 升级 Gradle 到 8.5
           echo "Upgrading Gradle Wrapper to 8.5..."
           find . -name "gradle-wrapper.properties" -print0 | xargs -0 sed -i 's/gradle-7\.5/gradle-8.5/g'
           find . -name "gradle-wrapper.properties" -print0 | xargs -0 sed -i 's/gradle-7\.[0-9]/gradle-8.5/g'
           
-          # 4. 生成证书
+          # 5. 生成证书
           keytool -genkey -v \
             -keystore debug.keystore \
             -storepass android \
@@ -112,7 +116,7 @@ jobs:
             -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
 
-          # 5. 编译
+          # 6. 编译
           ns build android --release \
             --no-hmr \
             --env.abiFilters=arm64-v8a \
