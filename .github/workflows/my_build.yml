@@ -85,86 +85,71 @@ jobs:
           echo "module.exports = function() { console.log('License report skipped by CI override'); };" > $HOOK_FILE
 
       # 【终极清洗】全文件扫描移除废弃配置 + 智能注入 Namespace + 强制 Java 17
-      - name: Universal Clean & Build
+      # 【绝杀修正】使用 Init 脚本运行时强制 Java 17 (避开 Groovy 语法坑)
+      - name: Final Java Fix
         run: |
           # 1. 基础清理
           rm -rf platforms node_modules/package-lock.json
           
-          # 2. 【第一重清洗】在 node_modules 源头处决所有 "generateReleaseBuildConfig"
-          # 不再限制文件类型，grep 找到哪里就删哪里
-          echo "Hunting down generateReleaseBuildConfig in node_modules..."
-          grep -rl "generateReleaseBuildConfig" node_modules | while read file; do
-            echo "Sanitizing: $file"
-            sed -i '/generateReleaseBuildConfig/d' "$file"
-          done
-          
-          # 3. 【第二重清洗】强制升级 Gradle 和 AGP 版本
+          # 2. 基础版本修复 (CLI + Local)
           NPM_ROOT=$(npm root -g)
+          echo "Patching Gradle Wrappers (8.5) & AGP (8.1.4)..."
           # 修复全局 CLI 模板
-          find "$NPM_ROOT" -name "gradle-wrapper.properties" -type f -exec sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.5-bin.zip|' {} +
-          find "$NPM_ROOT" -name "*.gradle" -type f -print0 | xargs -0 sed -i 's/com.android.tools.build:gradle:[0-9]\.[0-9]\.[0-9]/com.android.tools.build:gradle:8.1.4/g'
-          
-          # 修复本地 node_modules
-          find node_modules -name "gradle-wrapper.properties" -type f -exec sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.5-bin.zip|' {} +
-          find node_modules -name "*.gradle" -type f -print0 | xargs -0 sed -i 's/com.android.tools.build:gradle:[0-9]\.[0-9]\.[0-9]/com.android.tools.build:gradle:8.1.4/g'
+          find "$NPM_ROOT" node_modules -name "gradle-wrapper.properties" -type f -exec sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.5-bin.zip|' {} +
+          find "$NPM_ROOT" node_modules -name "*.gradle" -type f -print0 | xargs -0 sed -i 's/com.android.tools.build:gradle:[0-9]\.[0-9]\.[0-9]/com.android.tools.build:gradle:8.1.4/g'
 
-          # 4. 【第三重清洗】智能注入 Namespace (解决 AGP 8.0 报错)
-          echo "Injecting Namespaces into plugins..."
+          # 3. 自动注入 Namespace (解决 AGP 8.0 报错 - 必须保留)
+          echo "Injecting Namespaces..."
           find node_modules -name "AndroidManifest.xml" | while read manifest; do
             dir=$(dirname "$manifest")
             gradleFile="$dir/build.gradle"
-            # 只有当目录下有 build.gradle 且没有定义 namespace 时才注入
-            if [ -f "$gradleFile" ]; then
-              # 提取包名
-              pkg=$(grep -o 'package="[^"]*"' "$manifest" | cut -d'"' -f2 | head -1)
-              if [ ! -z "$pkg" ] && ! grep -q "namespace" "$gradleFile"; then
-                 echo "Injecting namespace '$pkg' into $gradleFile"
-                 # 使用追加模式，确保不破坏原有结构，同时开启 buildConfig
-                 printf "\nandroid {\n    namespace \"$pkg\"\n    buildFeatures { buildConfig = true }\n}\n" >> "$gradleFile"
-              fi
-            fi
-          done
-
-          # 5. 【第四重清洗】强制 Java 17 (追加配置覆盖法)
-          OVERRIDE_BLOCK='\nandroid {\n    compileOptions {\n        sourceCompatibility = JavaVersion.VERSION_17\n        targetCompatibility = JavaVersion.VERSION_17\n    }\n    kotlinOptions {\n        jvmTarget = "17"\n    }\n}\n'
-          find node_modules -name "build.gradle" -type f | while read gradleFile; do
-            if grep -q "android {" "$gradleFile"; then
-               printf "$OVERRIDE_BLOCK" >> "$gradleFile"
-            fi
-          done
-
-          # 6. 修复主项目 App_Resources
-          sed -i '/generateLocaleConfig/d' "App_Resources/documentscanner/Android/app.gradle"
-
-          # 7. 生成平台 (此时 node_modules 已被彻底净化，生成的 tempPlugin 也会是干净的)
-          ns platform add android
-          
-          # 8. 【最后补刀】检查生成的 platforms 目录 (防止漏网之鱼)
-          echo "Sanitizing platforms directory..."
-          # 再次移除 generateReleaseBuildConfig
-          grep -rl "generateReleaseBuildConfig" platforms/android | xargs sed -i '/generateReleaseBuildConfig/d' || true
-          # 再次升级 AGP/Gradle
-          find platforms/android -name "gradle-wrapper.properties" -type f -exec sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.5-bin.zip|' {} +
-          find platforms/android -name "*.gradle" -type f -print0 | xargs -0 sed -i 's/com.android.tools.build:gradle:[0-9]\.[0-9]\.[0-9]/com.android.tools.build:gradle:8.1.4/g'
-          # 再次注入 namespace (针对主项目)
-          find platforms/android -name "AndroidManifest.xml" | while read manifest; do
-            dir=$(dirname "$manifest")
-            gradleFile="$dir/build.gradle"
-            if [ -f "$gradleFile" ]; then
+            if [ -f "$gradleFile" ] && grep -q "package=" "$manifest"; then
               pkg=$(grep -o 'package="[^"]*"' "$manifest" | cut -d'"' -f2 | head -1)
               if [ ! -z "$pkg" ] && ! grep -q "namespace" "$gradleFile"; then
                  sed -i "s/android {/android { namespace '$pkg'/g" "$gradleFile"
+                 sed -i "s/android {/android { buildFeatures { buildConfig = true }/g" "$gradleFile"
               fi
             fi
           done
-          # 再次强制 Java 17
-          find platforms/android -name "build.gradle" -type f | while read gradleFile; do
-            if grep -q "android {" "$gradleFile"; then
-               printf "$OVERRIDE_BLOCK" >> "$gradleFile"
-            fi
-          done
 
-          # 9. 生成证书
+          # 4. 清理旧配置
+          find node_modules -name "*.gradle" -type f -exec sed -i '/generateReleaseBuildConfig/d' {} +
+          sed -i '/generateLocaleConfig/d' "App_Resources/documentscanner/Android/app.gradle"
+
+          # 5. 【核心大招】注入极简版 Init 脚本 (只强制 JavaCompile)
+          # 不引用外部类，纯原生 Gradle API，绝对不会报错
+          mkdir -p ~/.gradle/init.d
+          cat > ~/.gradle/init.d/force-java17.gradle <<EOF
+          allprojects {
+              afterEvaluate { project ->
+                  // 1. 强制修改 android 扩展块配置
+                  if (project.plugins.hasPlugin('com.android.library') || project.plugins.hasPlugin('com.android.application')) {
+                      android {
+                          compileOptions {
+                              sourceCompatibility = JavaVersion.VERSION_17
+                              targetCompatibility = JavaVersion.VERSION_17
+                          }
+                      }
+                  }
+                  // 2. 强制修改所有 Java 编译任务
+                  tasks.withType(JavaCompile).configureEach {
+                      sourceCompatibility = JavaVersion.VERSION_17
+                      targetCompatibility = JavaVersion.VERSION_17
+                  }
+              }
+          }
+          EOF
+          echo "Gradle Init Script injected."
+
+          # 6. 生成平台
+          ns platform add android
+          
+          # 7. 再次确保 platforms 里的 wrapper 是 8.5
+          # 修正了之前的 typo: "-type f -print0" (中间加了空格)
+          find platforms/android -name "gradle-wrapper.properties" -type f -exec sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.5-bin.zip|' {} +
+          find platforms/android -name "*.gradle" -type f -print0 | xargs -0 sed -i 's/com.android.tools.build:gradle:[0-9]\.[0-9]\.[0-9]/com.android.tools.build:gradle:8.1.4/g'
+
+          # 8. 生成证书
           keytool -genkey -v \
             -keystore debug.keystore \
             -storepass android \
@@ -175,7 +160,7 @@ jobs:
             -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
 
-          # 10. 编译
+          # 9. 编译
           ns build android --release \
             --no-hmr \
             --env.abiFilters=arm64-v8a \
@@ -184,6 +169,12 @@ jobs:
             --key-store-password android \
             --key-store-alias androiddebugkey \
             --key-store-alias-password android
+          
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release
+          path: platforms/android/app/build/outputs/apk/release/*.apk
           
       - name: Upload APK
         uses: actions/upload-artifact@v4
