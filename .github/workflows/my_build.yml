@@ -104,6 +104,28 @@ jobs:
           fi
 
       # ------------------------------------------------------------
+      # ✅ 关键修复：把 node_modules 里的 Gradle Wrapper 全部升级到 8.5
+      # （tempPlugin 是从 node_modules 复制出来的，不先改这里就会继续下载 7.5）
+      # ------------------------------------------------------------
+      - name: Force Gradle Wrapper 8.5 everywhere (node_modules + global)
+        run: |
+          set -euxo pipefail
+          URL="https\\://services.gradle.org/distributions/gradle-8.5-bin.zip"
+
+          echo "Patching gradle-wrapper.properties in node_modules..."
+          if [ -d "node_modules" ]; then
+            find node_modules -name "gradle-wrapper.properties" -type f -print -exec \
+              sed -i "s|distributionUrl=.*|distributionUrl=$URL|g" {} \;
+          fi
+
+          echo "Patching gradle-wrapper.properties in global npm root (if any)..."
+          NPM_ROOT=$(npm root -g)
+          if [ -d "$NPM_ROOT" ]; then
+            find "$NPM_ROOT" -name "gradle-wrapper.properties" -type f -print -exec \
+              sed -i "s|distributionUrl=.*|distributionUrl=$URL|g" {} \; || true
+          fi
+
+      # ------------------------------------------------------------
       # Kotlin 修复
       # ------------------------------------------------------------
       - name: Perfect Kotlin Fix
@@ -164,17 +186,11 @@ jobs:
 
           ns platform add android
 
-          # ✅ 关键修复：把 platforms 里所有 wrapper 从 7.x 统一升到 8.5
-          # 你的错误就是 tempPlugin/nativescript 的 wrapper 还是 7.5
-          echo "Patching all gradle-wrapper.properties to Gradle 8.5..."
+          # 再保险：把 platforms 里的 wrapper 也设成 8.5（主 app 用）
+          URL="https\\://services.gradle.org/distributions/gradle-8.5-bin.zip"
+          echo "Patching gradle wrapper inside platforms..."
           find platforms -name "gradle-wrapper.properties" -type f -print -exec \
-            sed -i 's|distributionUrl=.*|distributionUrl=https\://services.gradle.org/distributions/gradle-8.5-bin.zip|g' {} \;
-
-          # 保险：单点再补一次（你报错的具体文件就是这里）
-          if [ -f "platforms/tempPlugin/nativescript/gradle/wrapper/gradle-wrapper.properties" ]; then
-            sed -i 's|distributionUrl=.*|distributionUrl=https\://services.gradle.org/distributions/gradle-8.5-bin.zip|g' \
-              "platforms/tempPlugin/nativescript/gradle/wrapper/gradle-wrapper.properties"
-          fi
+            sed -i "s|distributionUrl=.*|distributionUrl=$URL|g" {} \;
 
           keytool -genkey -v \
             -keystore debug.keystore \
@@ -203,3 +219,4 @@ jobs:
         with:
           name: app-release
           path: platforms/android/app/build/outputs/apk/release/*.apk
+
