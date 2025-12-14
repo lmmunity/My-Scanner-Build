@@ -25,17 +25,20 @@ jobs:
         with:
           node-version: "18"
 
-      - name: Install build tools (node-gyp deps)
+      - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3 make g++
+          sudo apt-get install -y python3 make g++ unzip wget
 
       - name: Enable Corepack (Yarn)
         run: corepack enable
 
-      # ✅ 关键修复：跳过 optional，避免 Linux 上编 fsevents 挂掉
-      - name: Install NativeScript CLI
-        run: npm install -g nativescript@8.6.0 --omit=optional --no-audit --no-fund
+      # ✅ 关键修复：用 @nativescript/cli，并且 --ignore-scripts，彻底避开 fsevents 的 node-gyp
+      - name: Install NativeScript CLI (skip fsevents build)
+        run: npm install -g @nativescript/cli@8.6.0 --ignore-scripts --no-audit --no-fund
+
+      - name: Verify NativeScript CLI
+        run: ns --version
 
       - name: Install Dependencies
         run: |
@@ -62,7 +65,7 @@ jobs:
           cp -r tesseract-4.1.3/* plugin-nativeprocessor/platforms/android/cpp/tesseract/
 
       # ----------------------------------------------------------------
-      # Kotlin 代码修复（存在才 patch）
+      # Kotlin 修复（存在才 patch）
       # ----------------------------------------------------------------
       - name: Kotlin Fix (PDFUtils.kt)
         run: |
@@ -149,3 +152,4 @@ jobs:
         with:
           name: app-release
           path: platforms/android/app/build/outputs/apk/release/*.apk
+
