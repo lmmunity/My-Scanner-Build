@@ -25,14 +25,17 @@ jobs:
         with:
           node-version: "18"
 
-      # -----------------------------
-      # Yarn（这个仓库是 Yarn 结构，推荐用 Yarn）
-      # -----------------------------
+      - name: Install build tools (node-gyp deps)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3 make g++
+
       - name: Enable Corepack (Yarn)
         run: corepack enable
 
+      # ✅ 关键修复：跳过 optional，避免 Linux 上编 fsevents 挂掉
       - name: Install NativeScript CLI
-        run: npm install -g nativescript@8.6.0
+        run: npm install -g nativescript@8.6.0 --omit=optional --no-audit --no-fund
 
       - name: Install Dependencies
         run: |
@@ -59,7 +62,7 @@ jobs:
           cp -r tesseract-4.1.3/* plugin-nativeprocessor/platforms/android/cpp/tesseract/
 
       # ----------------------------------------------------------------
-      # Kotlin 代码修复（只在文件存在时 patch，避免找不到直接失败）
+      # Kotlin 代码修复（存在才 patch）
       # ----------------------------------------------------------------
       - name: Kotlin Fix (PDFUtils.kt)
         run: |
@@ -73,7 +76,6 @@ jobs:
             sed -i 's/\bdocument\b/document!!/g' "$FILE"
             sed -i 's/document_PROTECTED/document/g' "$FILE"
           fi
-
           GRADLE_CONFIG="plugin-nativeprocessor/platforms/android/include.gradle"
           mkdir -p "$(dirname "$GRADLE_CONFIG")"
           echo 'android { kotlinOptions { freeCompilerArgs += ["-Xopt-in=kotlin.ExperimentalStdlibApi", "-Xopt-in=kotlin.contracts.ExperimentalContracts"] } }' >> "$GRADLE_CONFIG"
@@ -91,22 +93,15 @@ jobs:
             "ndk;25.2.9519653" \
             "cmake;3.22.1"
 
-      # ----------------------------------------------------------------
-      # 禁用 license hook（存在才改）
-      # ----------------------------------------------------------------
       - name: Disable License Report Hook (if exists)
         run: |
           HOOK_FILE="node_modules/@nativescript-community/licenses/scripts/after-prepareNativeApp.js"
           if [ -f "$HOOK_FILE" ]; then
-            echo "Disabling hook: $HOOK_FILE"
             echo "module.exports = function() { console.log('License report skipped by CI override'); };" > "$HOOK_FILE"
           else
             echo "Hook not found, skip"
           fi
 
-      # ----------------------------------------------------------------
-      # 强制 Java 17（Gradle init 脚本）
-      # ----------------------------------------------------------------
       - name: Force Java 17 via Gradle init script
         run: |
           mkdir -p ~/.gradle/init.d
@@ -120,47 +115,12 @@ jobs:
             }
           }
           EOF
-          echo "Gradle Init Script injected."
 
-      # ----------------------------------------------------------------
-      # 生成平台（只清 platforms，别删 node_modules）
-      # ----------------------------------------------------------------
       - name: Prepare Android Platform
         run: |
           rm -rf platforms
           ns platform add android
 
-      # ----------------------------------------------------------------
-      # Gradle/AGP 版本与 namespace 注入（尽量兼容 AGP 8+）
-      # ----------------------------------------------------------------
-      - name: Gradle/AGP & Namespace Fix
-        run: |
-          echo "Patching Gradle wrapper to 8.5 and AGP to 8.1.4..."
-          find platforms/android -name "gradle-wrapper.properties" -type f -exec sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.5-bin.zip|' {} +
-          find platforms/android -name "*.gradle" -type f -print0 | xargs -0 sed -i 's/com.android.tools.build:gradle:[0-9]\.[0-9]\.[0-9]/com.android.tools.build:gradle:8.1.4/g' || true
-
-          echo "Injecting namespaces for node_modules Android libs..."
-          find node_modules -name "AndroidManifest.xml" | while read manifest; do
-            dir=$(dirname "$manifest")
-            gradleFile="$dir/build.gradle"
-            if [ -f "$gradleFile" ] && grep -q "package=" "$manifest"; then
-              pkg=$(grep -o 'package="[^"]*"' "$manifest" | cut -d'"' -f2 | head -1)
-              if [ -n "$pkg" ] && ! grep -q "namespace" "$gradleFile"; then
-                sed -i "s/android {/android { namespace '$pkg'/g" "$gradleFile"
-                # 有些库需要 BuildConfig
-                sed -i "s/android {/android { buildFeatures { buildConfig = true }/g" "$gradleFile"
-              fi
-            fi
-          done
-
-          # 清理可能冲突的旧配置（存在才执行）
-          if [ -f "App_Resources/documentscanner/Android/app.gradle" ]; then
-            sed -i '/generateLocaleConfig/d' "App_Resources/documentscanner/Android/app.gradle" || true
-          fi
-
-      # ----------------------------------------------------------------
-      # 生成 debug keystore + Release 编译（用 debug keystore 签名）
-      # ----------------------------------------------------------------
       - name: Generate Keystore
         run: |
           keytool -genkey -v \
