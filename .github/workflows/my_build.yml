@@ -125,16 +125,17 @@ jobs:
           fi
 
       # ------------------------------------------------------------
-      # ✅ 关键：Gradle init 脚本（统一修复 tempPlugin 的 namespace + 旧属性）
-      # - 1) 在 build.gradle 评估前，提供 generateReleaseBuildConfig/generateLocaleConfig 占位，避免 unknown property
-      # - 2) Android library/app 插件应用时，若 namespace 为空，则从 Manifest package 自动填充
+      # ✅ 关键：Gradle init 脚本（统一修复 tempPlugin 的 namespace + 旧属性 + Java/Kotlin 目标版本）
+      # - 1) 提供 generateReleaseBuildConfig/generateLocaleConfig 占位，避免 unknown property
+      # - 2) Android module 未设置 namespace 时，从 Manifest package 自动填
+      # - 3) 强制 JavaCompile=17 且 KotlinCompile.jvmTarget=17（修复你现在的报错）
       # ------------------------------------------------------------
-      - name: Install Gradle init script (AGP8 namespace + legacy props)
+      - name: Install Gradle init script (AGP8 namespace + legacy props + JVM 17)
         run: |
           set -euxo pipefail
           mkdir -p ~/.gradle/init.d
           cat > ~/.gradle/init.d/ci-agp8-fixes.gradle <<'EOF'
-          import java.util.regex.Pattern
+          import org.gradle.api.tasks.compile.JavaCompile
 
           def readManifestPackage(Project p) {
               def candidates = [
@@ -162,34 +163,64 @@ jobs:
               }
           }
 
-          // 再补 namespace：AGP8 必需
           allprojects { Project p ->
-              def applyNamespaceIfNeeded = {
-                  def androidExt = p.extensions.findByName("android")
-                  if (androidExt == null) return
-
-                  // 仅当 DSL 支持 namespace 且未设置时补
+              p.afterEvaluate {
+                  // 1) 强制所有 JavaCompile 任务 target=17（修复 “javac=1.8 vs kotlin=17”）
                   try {
-                      def cur = androidExt.hasProperty("namespace") ? androidExt.namespace : null
-                      if (cur == null || cur.toString().trim().isEmpty()) {
-                          def pkg = readManifestPackage(p)
-                          if (pkg == null || pkg.trim().isEmpty()) {
-                              pkg = "com.temp." + p.name.replaceAll("[^A-Za-z0-9_]", "_")
-                          }
-                          androidExt.namespace = pkg
+                      p.tasks.withType(JavaCompile).configureEach { t ->
+                          t.sourceCompatibility = "17"
+                          t.targetCompatibility = "17"
                       }
-                  } catch (Throwable ignored) { }
+                  } catch (Throwable ignored) {}
 
-                  // 保险：确保 buildConfig 可生成（避免一些库后续引用 BuildConfig 报错）
+                  // 2) 强制 KotlinCompile jvmTarget=17（用反射避免类未加载导致 init script 崩）
                   try {
-                      if (androidExt.hasProperty("buildFeatures")) {
-                          androidExt.buildFeatures.buildConfig = true
+                      def kc = Class.forName("org.jetbrains.kotlin.gradle.tasks.KotlinCompile")
+                      p.tasks.withType(kc).configureEach { t ->
+                          try { t.kotlinOptions.jvmTarget = "17" } catch(Throwable ignored) {}
                       }
-                  } catch (Throwable ignored) { }
+                  } catch (Throwable ignored) {}
+
+                  // 3) Android compileOptions / kotlinOptions 同步到 17 + namespace 自动补齐
+                  try {
+                      def androidExt = p.extensions.findByName("android")
+                      if (androidExt != null) {
+                          // namespace
+                          try {
+                              def cur = (androidExt.hasProperty("namespace") ? androidExt.namespace : null)
+                              if (cur == null || cur.toString().trim().isEmpty()) {
+                                  def pkg = readManifestPackage(p)
+                                  if (pkg == null || pkg.trim().isEmpty()) {
+                                      pkg = "com.temp." + p.name.replaceAll("[^A-Za-z0-9_]", "_")
+                                  }
+                                  androidExt.namespace = pkg
+                              }
+                          } catch (Throwable ignored) {}
+
+                          // compileOptions 17
+                          try {
+                              if (androidExt.hasProperty("compileOptions") && androidExt.compileOptions != null) {
+                                  androidExt.compileOptions.sourceCompatibility = JavaVersion.VERSION_17
+                                  androidExt.compileOptions.targetCompatibility = JavaVersion.VERSION_17
+                              }
+                          } catch (Throwable ignored) {}
+
+                          // kotlinOptions jvmTarget 17（如果 DSL 有）
+                          try {
+                              if (androidExt.hasProperty("kotlinOptions") && androidExt.kotlinOptions != null) {
+                                  androidExt.kotlinOptions.jvmTarget = "17"
+                              }
+                          } catch (Throwable ignored) {}
+
+                          // buildConfig 保险
+                          try {
+                              if (androidExt.hasProperty("buildFeatures") && androidExt.buildFeatures != null) {
+                                  androidExt.buildFeatures.buildConfig = true
+                              }
+                          } catch (Throwable ignored) {}
+                      }
+                  } catch (Throwable ignored) {}
               }
-
-              p.plugins.withId("com.android.application") { applyNamespaceIfNeeded() }
-              p.plugins.withId("com.android.library") { applyNamespaceIfNeeded() }
           }
           EOF
           echo "Gradle init script installed: ~/.gradle/init.d/ci-agp8-fixes.gradle"
@@ -217,7 +248,7 @@ jobs:
           fi
 
       # ------------------------------------------------------------
-      # Kotlin 修复
+      # Kotlin 源码修复（你原来的）
       # ------------------------------------------------------------
       - name: Perfect Kotlin Fix
         run: |
