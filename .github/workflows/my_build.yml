@@ -88,72 +88,65 @@ jobs:
       # 【修正上帝模式】修复空格遗漏和 Groovy 语法
       # ----------------------------------------------------------------
       # 【终极锁定】强制锁定 AGP 版本 + Java 17，无视任何旧配置
-      - name: Dependency Lock Fix
+      # 【终极补丁】自动修复所有插件：注入 Namespace + 移除废弃配置 + 强制 Java 17
+      - name: Auto-Patch Plugins
         run: |
           # 1. 基础清理
           rm -rf platforms node_modules/package-lock.json
           
-          # 2. 基础版本修复 (Gradle 8.5)
+          # 2. 基础版本修复 (Gradle 8.5 + AGP 8.1.4)
           NPM_ROOT=$(npm root -g)
-          echo "Patching Gradle Wrappers (8.5)..."
+          echo "Patching Gradle Wrappers..."
           find "$NPM_ROOT" node_modules -name "gradle-wrapper.properties" -type f -exec sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.5-bin.zip|' {} +
+          echo "Patching AGP versions..."
+          find "$NPM_ROOT" node_modules -name "*.gradle" -type f -print0 | xargs -0 sed -i 's/com.android.tools.build:gradle:[0-9]\.[0-9]\.[0-9]/com.android.tools.build:gradle:8.1.4/g'
 
-          # 3. 清理主项目旧配置
-          echo "Cleaning App_Resources..."
+          # 3. 【核心大招】智能遍历所有插件，修复 AGP 8.x 兼容性问题
+          echo "Starting intelligent plugin patching..."
+          
+          # 查找所有 build.gradle 文件
+          find node_modules -name "build.gradle" | while read gradleFile; do
+              dir=$(dirname "$gradleFile")
+              
+              # 尝试找到对应的 Manifest 文件
+              manifest=""
+              if [ -f "$dir/src/main/AndroidManifest.xml" ]; then manifest="$dir/src/main/AndroidManifest.xml"; fi
+              if [ -f "$dir/AndroidManifest.xml" ]; then manifest="$dir/AndroidManifest.xml"; fi
+              
+              if [ -f "$manifest" ]; then
+                  # A. 删除废弃的 generateReleaseBuildConfig (解决报错 1)
+                  sed -i '/generateReleaseBuildConfig/d' "$gradleFile"
+                  
+                  # B. 提取包名 (Package Name)
+                  pkg=$(grep -o 'package="[^"]*"' "$manifest" | cut -d'"' -f2 | head -1)
+                  
+                  if [ ! -z "$pkg" ]; then
+                      echo "Patching $gradleFile with namespace '$pkg'"
+                      
+                      # C. 追加配置块 (解决 Namespace 报错 + 强制 Java 17)
+                      # 利用 Gradle 的后加载覆盖特性，直接追加到文件末尾
+                      printf "\nandroid {\n    namespace \"$pkg\"\n    buildFeatures { buildConfig = true }\n    compileOptions {\n        sourceCompatibility = JavaVersion.VERSION_17\n        targetCompatibility = JavaVersion.VERSION_17\n    }\n}\n" >> "$gradleFile"
+                  fi
+              fi
+          done
+
+          # 4. 修复主项目配置
           sed -i '/generateLocaleConfig/d' "App_Resources/documentscanner/Android/app.gradle"
-          # 尝试直接修改那个“幕后黑手”文件 (如果存在)
-          find App_Resources -name "rootbuildscript.gradle" -type f -exec sed -i 's/7\.4\.2/8.1.4/g' {} +
-          # 顺手把所有 App_Resources 里的 7.4.2 都改了
-          find App_Resources -type f -exec sed -i 's/7\.4\.2/8.1.4/g' {} +
 
-          # 4. 生成平台
+          # 5. 生成平台
           ns platform add android
           
-          # 5. 【核心大招】向生成的 build.gradle 注入强制版本策略
-          # 这段代码会告诉 Gradle：凡是遇到 "com.android.tools.build:gradle"，不管它想要几点几，强制给它 8.1.4
-          echo "Injecting resolutionStrategy to enforce AGP 8.1.4..."
-          
-          ROOT_BUILD_GRADLE="platforms/android/build.gradle"
-          
-          # 定义我们要注入的策略块
-          STRATEGY_BLOCK='buildscript { configurations.all { resolutionStrategy { force "com.android.tools.build:gradle:8.1.4" } } }'
-          
-          # 将其插到文件最前面
-          if [ -f "$ROOT_BUILD_GRADLE" ]; then
-             # 使用临时文件技巧插入到第一行
-             echo "$STRATEGY_BLOCK" | cat - "$ROOT_BUILD_GRADLE" > temp && mv temp "$ROOT_BUILD_GRADLE"
-             echo "Resolution Strategy Injected!"
-          else
-             echo "Error: platforms/android/build.gradle not found!"
-             exit 1
-          fi
-
-          # 6. 【补刀】再次确保 Wrapper 是 8.5
+          # 6. 【补刀】再次清洗生成的 platforms 目录
+          echo "Sanitizing platforms directory..."
           find platforms/android -name "gradle-wrapper.properties" -type f -exec sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.5-bin.zip|' {} +
-
-          # 7. 【Java 17 强制修正】(保留之前的逻辑)
-          echo "Enforcing Java 17..."
-          OVERRIDE_BLOCK='\n\nandroid {\n    compileOptions {\n        sourceCompatibility = JavaVersion.VERSION_17\n        targetCompatibility = JavaVersion.VERSION_17\n    }\n    kotlinOptions {\n        jvmTarget = "17"\n    }\n}\n'
-          find platforms/android -name "build.gradle" -type f | while read gradleFile; do
-            if grep -q "android {" "$gradleFile"; then
-               printf "$OVERRIDE_BLOCK" >> "$gradleFile"
-            fi
-          done
-          
-          # 8. Namespace 注入 (保留)
-          find node_modules -name "AndroidManifest.xml" | while read manifest; do
-            dir=$(dirname "$manifest")
-            gradleFile="$dir/build.gradle"
-            if [ -f "$gradleFile" ]; then
-              pkg=$(grep -o 'package="[^"]*"' "$manifest" | cut -d'"' -f2 | head -1)
-              if [ ! -z "$pkg" ] && ! grep -q "namespace" "$gradleFile"; then
-                 sed -i "s/android {/android { namespace '$pkg'/g" "$gradleFile"
-                 sed -i "s/android {/android { buildFeatures { buildConfig = true }/g" "$gradleFile"
-              fi
-            fi
+          # 同样对生成的平台代码进行追加覆盖
+          find platforms/android -name "build.gradle" | while read gradleFile; do
+             if grep -q "android {" "$gradleFile"; then
+                printf "\nandroid {\n    compileOptions {\n        sourceCompatibility = JavaVersion.VERSION_17\n        targetCompatibility = JavaVersion.VERSION_17\n    }\n}\n" >> "$gradleFile"
+             fi
           done
 
-          # 9. 生成证书 & 编译
+          # 7. 生成证书
           keytool -genkey -v \
             -keystore debug.keystore \
             -storepass android \
@@ -164,6 +157,7 @@ jobs:
             -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
 
+          # 8. 编译
           ns build android --release \
             --no-hmr \
             --env.abiFilters=arm64-v8a \
@@ -172,6 +166,12 @@ jobs:
             --key-store-password android \
             --key-store-alias androiddebugkey \
             --key-store-alias-password android
+          
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release
+          path: platforms/android/app/build/outputs/apk/release/*.apk
           
       - name: Upload APK
         uses: actions/upload-artifact@v4
