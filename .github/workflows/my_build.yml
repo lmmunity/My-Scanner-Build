@@ -1,20 +1,27 @@
-name: Build Android APK
+name: Build Android APK (For Mid-term)
 
 on: [push, workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
+      # ------------------------------------------------------------
+      # Checkout
+      # ------------------------------------------------------------
       - name: Checkout Repo
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
+      # ------------------------------------------------------------
+      # Toolchains
+      # ------------------------------------------------------------
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
+          distribution: temurin
           java-version: '17'
 
       - name: Setup Node.js 18
@@ -25,103 +32,107 @@ jobs:
       - name: Install NativeScript
         run: npm install -g nativescript@8.6.0 --ignore-scripts
 
+      # ------------------------------------------------------------
+      # JS dependencies
+      # ------------------------------------------------------------
       - name: Install Dependencies
         run: |
+          set -eux
           npm install --legacy-peer-deps
           npx ts-patch install -s
 
-      # ----------------------------------------------------------------
-      # 手动填充原生依赖 (OpenCV + Tesseract)
-      # ----------------------------------------------------------------
+      # ------------------------------------------------------------
+      # Native deps: OpenCV
+      # ------------------------------------------------------------
       - name: Download OpenCV
         run: |
-          set -euxo pipefail
+          set -eux
           wget -q https://github.com/opencv/opencv/releases/download/4.5.5/opencv-4.5.5-android-sdk.zip
           unzip -q opencv-4.5.5-android-sdk.zip
           rm -rf plugin-nativeprocessor/platforms/android/cpp/opencv
           mkdir -p plugin-nativeprocessor/platforms/android/cpp/opencv
           cp -r OpenCV-android-sdk/sdk/native/* plugin-nativeprocessor/platforms/android/cpp/opencv/
 
+      # ------------------------------------------------------------
+      # Native deps: Tesseract
+      # ------------------------------------------------------------
       - name: Download Tesseract
         run: |
-          set -euxo pipefail
+          set -eux
           wget -q https://github.com/tesseract-ocr/tesseract/archive/refs/tags/4.1.3.zip -O tesseract.zip
           unzip -q tesseract.zip
           rm -rf plugin-nativeprocessor/platforms/android/cpp/tesseract
           mkdir -p plugin-nativeprocessor/platforms/android/cpp/tesseract
           cp -r tesseract-4.1.3/* plugin-nativeprocessor/platforms/android/cpp/tesseract/
 
-      # ----------------------------------------------------------------
-      # ✅ 关键修复：在 CI 中把 AGP 从 7.4.2 升到 8.1.4，避免 Baseline Profile 插件报错
-      # ✅ 同时补齐 namespace（AGP8 必需）
-      # ----------------------------------------------------------------
+      # ------------------------------------------------------------
+      # 🔥 关键修复：AGP + namespace（修复你刚才的 sed 崩溃）
+      # ------------------------------------------------------------
       - name: Patch AGP + Namespace for CI
         run: |
           set -euxo pipefail
 
-          # 1) 强制把 App_Resources 里锁死的 AGP 版本从 7.4.2 改成 8.1.4
           BUILD_SCRIPT="App_Resources/documentscanner/Android/buildscript.gradle"
           BEFORE_PLUGINS="App_Resources/documentscanner/Android/before-plugins.gradle"
           APP_GRADLE="App_Resources/documentscanner/Android/app.gradle"
-          MANIFEST="App_Resources/documentscanner/Android/src/main/AndroidManifest.xml"
 
+          DEFAULT_NS="com.akylas.documentscanner"
+
+          # 1) 升级 AGP（baseline profile 插件要求 >= 8.0）
           if [ -f "$BUILD_SCRIPT" ]; then
-            sed -i 's/com.android.tools.build:gradle:7.4.2/com.android.tools.build:gradle:8.1.4/g' "$BUILD_SCRIPT" || true
+            sed -i 's/com.android.tools.build:gradle:7.4.2/com.android.tools.build:gradle:8.1.4/g' "$BUILD_SCRIPT"
           fi
 
           if [ -f "$BEFORE_PLUGINS" ]; then
-            sed -i 's/androidBuildToolsVersion = "7.4.2"/androidBuildToolsVersion = "8.1.4"/g' "$BEFORE_PLUGINS" || true
+            sed -i 's/androidBuildToolsVersion = "7.4.2"/androidBuildToolsVersion = "8.1.4"/g' "$BEFORE_PLUGINS"
           fi
 
-          # 2) 取 applicationId / manifest package 作为 namespace 值（尽量自动）
+          # 2) 尝试从 app.gradle 里读取 applicationId 作为 namespace
           NS_PKG=""
           if [ -f "$APP_GRADLE" ]; then
-            NS_PKG=$(grep -Eo 'applicationId[[:space:]]+"[^"]+"' "$APP_GRADLE" | head -1 | cut -d'"' -f2 || true)
+            NS_PKG=$(grep -Eo "applicationId[[:space:]]+['\"][^'\"]+['\"]" "$APP_GRADLE" \
+              | head -1 \
+              | sed -E "s/applicationId[[:space:]]+['\"]([^'\"]+)['\"]/\\1/" \
+              || true)
           fi
-          if [ -z "$NS_PKG" ] && [ -f "$MANIFEST" ]; then
-            NS_PKG=$(grep -Eo 'package="[^"]+"' "$MANIFEST" | head -1 | cut -d'"' -f2 || true)
-          fi
+
           if [ -z "$NS_PKG" ]; then
-            NS_PKG="com.example.documentscanner"
-          fi
-          echo "Resolved namespace = $NS_PKG"
-
-          # 3) AGP8 要求 namespace：如果 app.gradle 没有就注入到第一个 android { 后面
-          if [ -f "$APP_GRADLE" ]; then
-            if ! grep -q "^[[:space:]]*namespace[[:space:]]" "$APP_GRADLE"; then
-              # 在首次出现的 android { 后插入 namespace
-              sed -i "0,/android[[:space:]]*{/s/android[[:space:]]*{/android {\n    namespace \"$NS_PKG\"/}" "$APP_GRADLE"
-            fi
+            NS_PKG="$DEFAULT_NS"
           fi
 
-      # ----------------------------------------------------------------
-      # 【完美修正】Kotlin 代码修复
-      # ----------------------------------------------------------------
+          echo "Using namespace: $NS_PKG"
+
+          # 3) 注入 namespace（AGP 8 必需）—— 已修复 sed 语法错误
+          if [ -f "$APP_GRADLE" ] && ! grep -qE '^[[:space:]]*namespace[[:space:]]+' "$APP_GRADLE"; then
+            sed -i "0,/android[[:space:]]*{/s|android[[:space:]]*{|android {\n    namespace \"$NS_PKG\"|" "$APP_GRADLE"
+          fi
+
+      # ------------------------------------------------------------
+      # Kotlin 修复（你原来的）
+      # ------------------------------------------------------------
       - name: Perfect Kotlin Fix
         run: |
-          set -euxo pipefail
+          set -eux
           FILE=$(find plugin-nativeprocessor -name "PDFUtils.kt" | head -1)
-          echo "Patching source file: $FILE"
           sed -i '1i @file:OptIn(kotlin.ExperimentalStdlibApi::class, kotlin.contracts.ExperimentalContracts::class)' "$FILE"
           sed -i 's/val document/val document_PROTECTED/g' "$FILE"
           sed -i 's/var document/var document_PROTECTED/g' "$FILE"
           sed -i 's/document *=/document_PROTECTED =/g' "$FILE"
           sed -i 's/\bdocument\b/document!!/g' "$FILE"
           sed -i 's/document_PROTECTED/document/g' "$FILE"
-          GRADLE_CONFIG="plugin-nativeprocessor/platforms/android/include.gradle"
-          mkdir -p $(dirname $GRADLE_CONFIG)
-          echo 'android { kotlinOptions { freeCompilerArgs += ["-Xopt-in=kotlin.ExperimentalStdlibApi", "-Xopt-in=kotlin.contracts.ExperimentalContracts"] } }' >> $GRADLE_CONFIG
 
-      # ----------------------------------------------------------------
-      # ✅ 关键修复：baselineprofile compileSdk=34，需要装 Android 34
-      # ----------------------------------------------------------------
-      - name: Install Android SDK 33 + 34
+          mkdir -p plugin-nativeprocessor/platforms/android
+          echo 'android { kotlinOptions { freeCompilerArgs += ["-Xopt-in=kotlin.ExperimentalStdlibApi", "-Xopt-in=kotlin.contracts.ExperimentalContracts"] } }' \
+            >> plugin-nativeprocessor/platforms/android/include.gradle
+
+      # ------------------------------------------------------------
+      # Android SDK（33 + 34，baselineprofile 必须）
+      # ------------------------------------------------------------
+      - name: Install Android SDK
         run: |
-          set -euxo pipefail
+          set -eux
           echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
           echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
-          echo "$ANDROID_HOME/build-tools/33.0.0" >> $GITHUB_PATH
-          echo "$ANDROID_HOME/build-tools/34.0.0" >> $GITHUB_PATH
           export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$PATH
           yes | sdkmanager --licenses
           sdkmanager \
@@ -131,80 +142,26 @@ jobs:
             "build-tools;34.0.0" \
             "platform-tools"
 
-      # ----------------------------------------------------------------
-      # 【禁用】License 插件钩子
-      # ----------------------------------------------------------------
+      # ------------------------------------------------------------
+      # 禁用 license hook
+      # ------------------------------------------------------------
       - name: Disable License Report Hook
         run: |
-          set -euxo pipefail
-          HOOK_FILE="node_modules/@nativescript-community/licenses/scripts/after-prepareNativeApp.js"
-          echo "Disabling hook: $HOOK_FILE"
-          echo "module.exports = function() { console.log('License report skipped by CI override'); };" > $HOOK_FILE
+          set -eux
+          echo "module.exports = function() { console.log('License report skipped in CI'); };" \
+            > node_modules/@nativescript-community/licenses/scripts/after-prepareNativeApp.js
 
-      # ----------------------------------------------------------------
-      # 你原来的“终极清洗/Java17/Wrapper/AGP”逻辑保留（注意：这里也会 patch 很多 gradle）
-      # ----------------------------------------------------------------
-      - name: Final Java Fix + Build
+      # ------------------------------------------------------------
+      # 构建
+      # ------------------------------------------------------------
+      - name: Build Android APK
         run: |
-          set -euxo pipefail
+          set -eux
 
-          # 1. 基础清理
-          rm -rf platforms node_modules/package-lock.json
+          rm -rf platforms
 
-          # 2. 基础版本修复 (CLI + Local)
-          NPM_ROOT=$(npm root -g)
-          echo "Patching Gradle Wrappers (8.5) & AGP (8.1.4)..."
-          find "$NPM_ROOT" node_modules -name "gradle-wrapper.properties" -type f -exec sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.5-bin.zip|' {} +
-          find "$NPM_ROOT" node_modules -name "*.gradle" -type f -print0 | xargs -0 sed -i 's/com.android.tools.build:gradle:[0-9]\.[0-9]\.[0-9]/com.android.tools.build:gradle:8.1.4/g'
-
-          # 3. 自动注入 Namespace（node_modules 里的库）
-          echo "Injecting Namespaces..."
-          find node_modules -name "AndroidManifest.xml" | while read manifest; do
-            dir=$(dirname "$manifest")
-            gradleFile="$dir/build.gradle"
-            if [ -f "$gradleFile" ] && grep -q "package=" "$manifest"; then
-              pkg=$(grep -o 'package="[^"]*"' "$manifest" | cut -d'"' -f2 | head -1)
-              if [ ! -z "$pkg" ] && ! grep -q "namespace" "$gradleFile"; then
-                 sed -i "s/android {/android { namespace '$pkg'/g" "$gradleFile"
-                 sed -i "s/android {/android { buildFeatures { buildConfig = true }/g" "$gradleFile"
-              fi
-            fi
-          done
-
-          # 4. 清理旧配置
-          find node_modules -name "*.gradle" -type f -exec sed -i '/generateReleaseBuildConfig/d' {} +
-          sed -i '/generateLocaleConfig/d' "App_Resources/documentscanner/Android/app.gradle" || true
-
-          # 5. Init 脚本强制 Java 17
-          mkdir -p ~/.gradle/init.d
-          cat > ~/.gradle/init.d/force-java17.gradle <<EOF
-          allprojects {
-              afterEvaluate { project ->
-                  if (project.plugins.hasPlugin('com.android.library') || project.plugins.hasPlugin('com.android.application')) {
-                      android {
-                          compileOptions {
-                              sourceCompatibility = JavaVersion.VERSION_17
-                              targetCompatibility = JavaVersion.VERSION_17
-                          }
-                      }
-                  }
-                  tasks.withType(JavaCompile).configureEach {
-                      sourceCompatibility = JavaVersion.VERSION_17
-                      targetCompatibility = JavaVersion.VERSION_17
-                  }
-              }
-          }
-          EOF
-          echo "Gradle Init Script injected."
-
-          # 6. 生成平台
           ns platform add android
 
-          # 7. 再次确保 platforms 里的 wrapper 是 8.5 + AGP 8.1.4
-          find platforms/android -name "gradle-wrapper.properties" -type f -exec sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.5-bin.zip|' {} +
-          find platforms/android -name "*.gradle" -type f -print0 | xargs -0 sed -i 's/com.android.tools.build:gradle:[0-9]\.[0-9]\.[0-9]/com.android.tools.build:gradle:8.1.4/g'
-
-          # 8. 生成证书
           keytool -genkey -v \
             -keystore debug.keystore \
             -storepass android \
@@ -215,7 +172,6 @@ jobs:
             -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
 
-          # 9. 编译
           ns build android --release \
             --no-hmr \
             --env.abiFilters=arm64-v8a \
@@ -225,6 +181,9 @@ jobs:
             --key-store-alias androiddebugkey \
             --key-store-alias-password android
 
+      # ------------------------------------------------------------
+      # 上传 APK
+      # ------------------------------------------------------------
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
