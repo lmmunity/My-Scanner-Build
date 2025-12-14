@@ -66,14 +66,13 @@ jobs:
           cp -r tesseract-4.1.3/* plugin-nativeprocessor/platforms/android/cpp/tesseract/
 
       # ------------------------------------------------------------
-      # Android SDK（33 + 34 + emulator）
+      # Android SDK（33 + 34）
       # ------------------------------------------------------------
-      - name: Install Android SDK (33 + 34 + emulator)
+      - name: Install Android SDK (33 + 34)
         run: |
           set -eux
           echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
           echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
-          echo "$ANDROID_HOME/emulator" >> $GITHUB_PATH
           echo "$ANDROID_HOME/build-tools/33.0.0" >> $GITHUB_PATH
           echo "$ANDROID_HOME/build-tools/34.0.0" >> $GITHUB_PATH
 
@@ -82,24 +81,25 @@ jobs:
 
           sdkmanager \
             "platform-tools" \
-            "emulator" \
             "platforms;android-33" \
             "platforms;android-34" \
             "build-tools;33.0.0" \
             "build-tools;34.0.0"
 
       # ------------------------------------------------------------
-      # 🔥 修复：AGP 升级（baseline profile 要求 >= 8.0）+ 主 app namespace
+      # 🔥 修复：AGP 升级 + compileSdk=34 + app namespace
       # ------------------------------------------------------------
-      - name: Patch AGP + App Namespace for CI
+      - name: Patch AGP + compileSdk 34 + App Namespace for CI
         run: |
           set -euxo pipefail
+
           BUILD_SCRIPT="App_Resources/documentscanner/Android/buildscript.gradle"
           BEFORE_PLUGINS="App_Resources/documentscanner/Android/before-plugins.gradle"
           APP_GRADLE="App_Resources/documentscanner/Android/app.gradle"
           DEFAULT_NS="com.akylas.documentscanner"
+          COMPILE_SDK="34"
 
-          # 升级 AGP
+          # 1) 升级 AGP（baseline profile 插件要求 >= 8.0）
           if [ -f "$BUILD_SCRIPT" ]; then
             sed -i 's/com.android.tools.build:gradle:7.4.2/com.android.tools.build:gradle:8.1.4/g' "$BUILD_SCRIPT" || true
           fi
@@ -107,7 +107,18 @@ jobs:
             sed -i 's/androidBuildToolsVersion = "7.4.2"/androidBuildToolsVersion = "8.1.4"/g' "$BEFORE_PLUGINS" || true
           fi
 
-          # 主 app 注入 namespace（如果没有）
+          # 2) compileSdk -> 34（修复 cameraX 1.3.4 要求）
+          #    尽量覆盖常见写法：compileSdkVersion 33 / compileSdkVersion = 33 / compileSdk 33 / androidCompileSdkVersion = 33
+          for f in "$APP_GRADLE" "$BEFORE_PLUGINS"; do
+            if [ -f "$f" ]; then
+              sed -i -E "s/(compileSdkVersion[[:space:]]*=?[[:space:]]*)33/\\1${COMPILE_SDK}/g" "$f" || true
+              sed -i -E "s/(compileSdk[[:space:]]*=?[[:space:]]*)33/\\1${COMPILE_SDK}/g" "$f" || true
+              sed -i -E "s/(androidCompileSdkVersion[[:space:]]*=?[[:space:]]*)33/\\1${COMPILE_SDK}/g" "$f" || true
+              sed -i -E "s/(androidCompileSdk[[:space:]]*=?[[:space:]]*)33/\\1${COMPILE_SDK}/g" "$f" || true
+            fi
+          done
+
+          # 3) 主 app 注入 namespace（如果没有）
           NS_PKG=""
           if [ -f "$APP_GRADLE" ]; then
             NS_PKG=$(grep -Eo "applicationId[[:space:]]+['\"][^'\"]+['\"]" "$APP_GRADLE" \
@@ -125,10 +136,7 @@ jobs:
           fi
 
       # ------------------------------------------------------------
-      # ✅ 关键：Gradle init 脚本（统一修复 tempPlugin 的 namespace + 旧属性 + Java/Kotlin 目标版本）
-      # - 1) 提供 generateReleaseBuildConfig/generateLocaleConfig 占位，避免 unknown property
-      # - 2) Android module 未设置 namespace 时，从 Manifest package 自动填
-      # - 3) 强制 JavaCompile=17 且 KotlinCompile.jvmTarget=17（修复你现在的报错）
+      # ✅ Gradle init 脚本：namespace + 旧属性 + JVM 17（Kotlin/Java 版本一致）
       # ------------------------------------------------------------
       - name: Install Gradle init script (AGP8 namespace + legacy props + JVM 17)
         run: |
@@ -153,7 +161,6 @@ jobs:
               return null
           }
 
-          // 先占位：避免 build.gradle 里访问 generateReleaseBuildConfig / generateLocaleConfig 直接爆炸
           gradle.beforeProject { Project p ->
               if (!p.extensions.extraProperties.has("generateReleaseBuildConfig")) {
                   p.ext.generateReleaseBuildConfig = [enabled: true]
@@ -165,7 +172,7 @@ jobs:
 
           allprojects { Project p ->
               p.afterEvaluate {
-                  // 1) 强制所有 JavaCompile 任务 target=17（修复 “javac=1.8 vs kotlin=17”）
+                  // JavaCompile -> 17
                   try {
                       p.tasks.withType(JavaCompile).configureEach { t ->
                           t.sourceCompatibility = "17"
@@ -173,7 +180,7 @@ jobs:
                       }
                   } catch (Throwable ignored) {}
 
-                  // 2) 强制 KotlinCompile jvmTarget=17（用反射避免类未加载导致 init script 崩）
+                  // KotlinCompile -> jvmTarget 17（反射避免类不存在）
                   try {
                       def kc = Class.forName("org.jetbrains.kotlin.gradle.tasks.KotlinCompile")
                       p.tasks.withType(kc).configureEach { t ->
@@ -181,11 +188,10 @@ jobs:
                       }
                   } catch (Throwable ignored) {}
 
-                  // 3) Android compileOptions / kotlinOptions 同步到 17 + namespace 自动补齐
+                  // Android：namespace 自动补齐 + compileOptions 17 + buildConfig
                   try {
                       def androidExt = p.extensions.findByName("android")
                       if (androidExt != null) {
-                          // namespace
                           try {
                               def cur = (androidExt.hasProperty("namespace") ? androidExt.namespace : null)
                               if (cur == null || cur.toString().trim().isEmpty()) {
@@ -197,7 +203,6 @@ jobs:
                               }
                           } catch (Throwable ignored) {}
 
-                          // compileOptions 17
                           try {
                               if (androidExt.hasProperty("compileOptions") && androidExt.compileOptions != null) {
                                   androidExt.compileOptions.sourceCompatibility = JavaVersion.VERSION_17
@@ -205,14 +210,12 @@ jobs:
                               }
                           } catch (Throwable ignored) {}
 
-                          // kotlinOptions jvmTarget 17（如果 DSL 有）
                           try {
                               if (androidExt.hasProperty("kotlinOptions") && androidExt.kotlinOptions != null) {
                                   androidExt.kotlinOptions.jvmTarget = "17"
                               }
                           } catch (Throwable ignored) {}
 
-                          // buildConfig 保险
                           try {
                               if (androidExt.hasProperty("buildFeatures") && androidExt.buildFeatures != null) {
                                   androidExt.buildFeatures.buildConfig = true
@@ -223,24 +226,21 @@ jobs:
               }
           }
           EOF
-          echo "Gradle init script installed: ~/.gradle/init.d/ci-agp8-fixes.gradle"
+          echo "Gradle init script installed."
 
       # ------------------------------------------------------------
       # ✅ 强制 Gradle Wrapper 8.5（node_modules / global）
-      # tempPlugin 是从 node_modules 复制生成的，所以必须先 patch node_modules
       # ------------------------------------------------------------
       - name: Force Gradle Wrapper 8.5 everywhere (node_modules + global)
         run: |
           set -euxo pipefail
           URL="https\\://services.gradle.org/distributions/gradle-8.5-bin.zip"
 
-          echo "Patching gradle-wrapper.properties in node_modules..."
           if [ -d "node_modules" ]; then
             find node_modules -name "gradle-wrapper.properties" -type f -print -exec \
               sed -i "s|distributionUrl=.*|distributionUrl=$URL|g" {} \;
           fi
 
-          echo "Patching gradle-wrapper.properties in global npm root (if any)..."
           NPM_ROOT=$(npm root -g)
           if [ -d "$NPM_ROOT" ]; then
             find "$NPM_ROOT" -name "gradle-wrapper.properties" -type f -print -exec \
@@ -282,10 +282,9 @@ jobs:
           set -euxo pipefail
 
           rm -rf platforms
-
           ns platform add android
 
-          # 再保险：把 platforms 里的 wrapper 也设成 8.5（主 app 用）
+          # 再保险：platforms wrapper = 8.5
           URL="https\\://services.gradle.org/distributions/gradle-8.5-bin.zip"
           echo "Patching gradle wrapper inside platforms..."
           find platforms -name "gradle-wrapper.properties" -type f -print -exec \
